@@ -18,7 +18,7 @@ import { keepPreviousData } from '@tanstack/react-query';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 
 import { $api } from '../../api/client';
-import { useDeleteEpisodeQuery } from '../../features/datasets/episodes/use-episodes';
+import { useDeleteEpisodeQuery, useOptimizeDatasetQuery } from '../../features/datasets/episodes/use-episodes';
 import { useProjectId } from '../../features/projects/use-project';
 import { paths } from '../../paths';
 import { pluralize } from '../../utils';
@@ -35,6 +35,11 @@ export const DatasetViewer = () => {
     const { project_id } = useProjectId();
 
     const { deleteEpisodes, isPending } = useDeleteEpisodeQuery(dataset.id!);
+    const {
+        activeJob: optimizationJob,
+        optimizeDataset,
+        isPending: isOptimizePending,
+    } = useOptimizeDatasetQuery(dataset.id!);
     const [activeEpisodeIndex, setActiveEpisodeIndex] = useActiveEpisode();
     const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
 
@@ -107,10 +112,30 @@ export const DatasetViewer = () => {
                 <Panel id='episode-list' defaultSize='35%' minSize='250px' maxSize='70%' className={classes.listPanel}>
                     <Flex justifyContent='space-between' alignItems='center' gap='size-100' marginBottom='size-200'>
                         {selectedEpisodes.length === 0 ? (
-                            <Button href={recordPath} variant='secondary'>
-                                <Add fill='white' style={{ marginRight: '4px' }} />
-                                <Text>Add Episode</Text>
-                            </Button>
+                            <Flex gap='size-100'>
+                                <Button href={recordPath} variant='secondary'>
+                                    <Add fill='white' style={{ marginRight: '4px' }} />
+                                    <Text>Add Episode</Text>
+                                </Button>
+                                <DialogTrigger>
+                                    <Button
+                                        variant='secondary'
+                                        isDisabled={isOptimizePending || optimizationJob !== undefined}
+                                    >
+                                        <Text>{optimizationJob ? 'Optimizing dataset…' : 'Optimize dataset'}</Text>
+                                    </Button>
+                                    <AlertDialog
+                                        title='Optimize dataset'
+                                        variant='warning'
+                                        primaryActionLabel='Optimize'
+                                        isPrimaryActionDisabled={isOptimizePending || optimizationJob !== undefined}
+                                        onPrimaryAction={() => optimizeDataset()}
+                                    >
+                                        Optimization re-encodes video to reclaim unused storage. A full backup is kept
+                                        before it starts.
+                                    </AlertDialog>
+                                </DialogTrigger>
+                            </Flex>
                         ) : (
                             <Flex gap='size-200' justifyContent='end'>
                                 <ActionButton onPress={() => setSelectedEpisodes([])}>
@@ -134,6 +159,24 @@ export const DatasetViewer = () => {
                                     >
                                         Are you sure you want to delete {selectedEpisodes.length} selected{' '}
                                         {pluralize(selectedEpisodes.length, 'episode', 'episodes')}?
+                                    </AlertDialog>
+                                </DialogTrigger>
+                                <DialogTrigger>
+                                    <Button
+                                        variant='secondary'
+                                        isDisabled={isOptimizePending || optimizationJob !== undefined}
+                                    >
+                                        <Text>{optimizationJob ? 'Optimizing dataset…' : 'Optimize dataset'}</Text>
+                                    </Button>
+                                    <AlertDialog
+                                        title='Optimize dataset'
+                                        variant='warning'
+                                        primaryActionLabel='Optimize'
+                                        isPrimaryActionDisabled={isOptimizePending || optimizationJob !== undefined}
+                                        onPrimaryAction={() => optimizeDataset()}
+                                    >
+                                        Optimization re-encodes video to reclaim unused storage. A full backup is kept
+                                        before it starts.
                                     </AlertDialog>
                                 </DialogTrigger>
                             </Flex>

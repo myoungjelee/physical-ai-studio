@@ -10,6 +10,7 @@ import {
     EpisodeViewerProvider,
     useEpisodeViewer,
 } from '../../features/datasets/episodes/episode-viewer-provider.component';
+import { TrimEpisodeControls } from '../../features/datasets/episodes/trim-episode-controls';
 import { Player } from '../../features/datasets/episodes/use-player';
 import { RobotModelsProvider } from '../../features/robots/robot-models-context';
 import { TimelineControls } from './timeline-controls';
@@ -58,7 +59,7 @@ const LiveEpisodeChart = ({ episode, player }: LiveEpisodeChartProps) => {
     );
 };
 
-const EpisodeTimelineComponent = () => {
+const EpisodeTimelineComponent = ({ datasetId }: { datasetId: string }) => {
     const { player, episode } = useEpisodeViewer();
 
     return (
@@ -69,6 +70,12 @@ const EpisodeTimelineComponent = () => {
                     <LiveEpisodeChart episode={episode} player={player} />
                 </DisclosurePanel>
             </Disclosure>
+            <TrimEpisodeControls
+                key={`${episode.episode_index}-${episode.length}`}
+                datasetId={datasetId}
+                episode={episode}
+                player={player}
+            />
             {/* We reset the time controls state for the new episode */}
             <TimelineControls key={episode.episode_index} player={player} />
         </div>
@@ -93,7 +100,7 @@ export const EpisodeViewer = ({ episode, dataset, environment }: EpisodeViewerPr
                             environment={environment}
                         />
                     </Flex>
-                    <EpisodeTimelineComponent />
+                    <EpisodeTimelineComponent datasetId={String(dataset.id)} />
                 </Flex>
             </RobotModelsProvider>
         </EpisodeViewerProvider>
