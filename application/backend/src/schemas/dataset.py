@@ -31,6 +31,13 @@ class Episode(BaseModel):
     videos: dict[str, EpisodeVideo]
 
 
+class EpisodeTrimUpdate(BaseModel):
+    """Retain the half-open source-frame interval ``[start_frame, end_frame)``."""
+
+    start_frame: int = Field(ge=0)
+    end_frame: int = Field(ge=0)
+
+
 class LeRobotDatasetInfo(BaseModel):
     root: str
     repo_id: str

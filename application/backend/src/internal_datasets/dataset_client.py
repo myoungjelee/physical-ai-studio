@@ -64,6 +64,17 @@ class DatasetClient(ABC):
         """Copy over repo without given episode_indices to output_path."""
 
     @abstractmethod
+    def apply_episode_edits(
+        self,
+        *,
+        delete_episode_indices: list[int] | None = None,
+        trim_episode_index: int | None = None,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
+    ) -> None:
+        """Apply canonical data/meta-only episode edits without re-encoding video."""
+
+    @abstractmethod
     def add_frame(self, obs: dict, act: dict, task: str) -> None:
         """Add frame to recording buffer."""
 

@@ -19,6 +19,7 @@ from loguru import logger
 
 from internal_datasets.access_mode import DatasetAccessMode
 from internal_datasets.dataset_client import DatasetClient
+from internal_datasets.lerobot.editor import EpisodeEdit, apply_episode_edits
 from internal_datasets.lerobot.streaming_encoding_settings import StreamingEncodingSettings
 from internal_datasets.mutations.recording_mutation import RecordingMutation
 from schemas import Episode, EpisodeInfo, EpisodeVideo
@@ -116,6 +117,32 @@ class InternalLeRobotDataset(DatasetClient):
         """Copy over repo without given episode_indices to output_path."""
         lerobot_delete_episodes(dataset=self._dataset, episode_indices=episode_indices, output_dir=output_path)
         return InternalLeRobotDataset(output_path, streaming_encoding_settings=self._streaming_encoding_settings)
+
+    def apply_episode_edits(
+        self,
+        *,
+        delete_episode_indices: list[int] | None = None,
+        trim_episode_index: int | None = None,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
+    ) -> None:
+        """Rewrite LeRobot parquet/metadata while retaining video files unchanged."""
+        edits: list[EpisodeEdit] = []
+        if delete_episode_indices:
+            edits.extend(EpisodeEdit(episode_index=index, deleted=True) for index in delete_episode_indices)
+        if trim_episode_index is not None:
+            if start_frame is None or end_frame is None:
+                raise ValueError("A trim requires both start_frame and end_frame")
+            edits.append(
+                EpisodeEdit(
+                    episode_index=trim_episode_index,
+                    start_frame=start_frame,
+                    end_frame=end_frame,
+                )
+            )
+        operation = "delete_episodes" if delete_episode_indices else "trim_episode"
+        apply_episode_edits(self.path, edits, operation=operation)
+        self.load_dataset()
 
     def get_tasks(self) -> list[str]:
         """Get Tasks in dataset."""

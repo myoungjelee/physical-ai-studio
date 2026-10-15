@@ -2,7 +2,7 @@ from physicalai_studio_plugin.schemas import SerialPortInfo
 
 from .base_job import JobStatus, JobType
 from .camera import Camera, CameraProfile
-from .dataset import Dataset, Episode, EpisodeInfo, EpisodeVideo, LeRobotDatasetInfo, Snapshot
+from .dataset import Dataset, Episode, EpisodeInfo, EpisodeTrimUpdate, EpisodeVideo, LeRobotDatasetInfo, Snapshot
 from .hardware import DeviceInfo, DeviceType, InferenceBackend, InferenceDevice, InferenceDeviceInfo
 from .job import DatasetImportJob, Job, TrainJob
 from .model import BackendExportDetail, Model, ModelDetailResponse
@@ -18,6 +18,7 @@ __all__ = [
     "DeviceType",
     "Episode",
     "EpisodeInfo",
+    "EpisodeTrimUpdate",
     "EpisodeVideo",
     "InferenceBackend",
     "InferenceDevice",

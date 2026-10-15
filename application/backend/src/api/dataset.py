@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, Query, Request, Response, status
 from fastapi.exceptions import HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -12,9 +12,8 @@ from starlette.background import BackgroundTask
 from api.dependencies import get_dataset_download_service, get_dataset_service, get_episode_thumbnail_service
 from api.utils import safe_archive_name
 from internal_datasets.lerobot.lerobot_dataset import InternalLeRobotDataset
-from internal_datasets.mutations.delete_episode_mutation import DeleteEpisodesMutation
 from internal_datasets.utils import get_internal_read_dataset
-from schemas import Dataset, Episode, EpisodeInfo
+from schemas import Dataset, Episode, EpisodeInfo, EpisodeTrimUpdate
 from services import DatasetDownloadService, DatasetService, EpisodeThumbnailService
 
 router = APIRouter(prefix="/api/dataset", tags=["Dataset"])
@@ -100,15 +99,50 @@ async def get_episode_thumbnail(  # noqa: PLR0913
 @router.delete("/{dataset_id}/episodes")
 async def delete_episodes_of_dataset(
     dataset_id: UUID,
-    episode_indices: list[int],
     dataset_service: Annotated[DatasetService, Depends(get_dataset_service)],
+    episode_indices: Annotated[list[int] | None, Query()] = None,
+    body_episode_indices: Annotated[list[int] | None, Body()] = None,
 ) -> list[Episode]:
-    """Get dataset episodes of dataset by id."""
+    """Delete episodes without re-encoding their source video files.
+
+    ``episode_indices`` is accepted as a query parameter. The JSON body form is
+    retained temporarily for compatibility with existing Studio clients.
+    """
+    indices = episode_indices if episode_indices is not None else body_episode_indices
+    if not indices:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="episode_indices is required")
     dataset = await dataset_service.get_dataset_by_id(dataset_id)
     dataset_client = get_internal_read_dataset(dataset)
-    mutation = DeleteEpisodesMutation(dataset_client)
-    result = mutation.delete_episodes(episode_indices)
-    return result.get_episodes()
+    if not isinstance(dataset_client, InternalLeRobotDataset):
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Episode editing is unsupported")
+    dataset_client.apply_episode_edits(delete_episode_indices=indices)
+    return dataset_client.get_episodes()
+
+
+@router.put("/{dataset_id}/episodes/{episode_index}")
+async def trim_episode_of_dataset(
+    dataset_id: UUID,
+    episode_index: int,
+    payload: EpisodeTrimUpdate,
+    dataset_service: Annotated[DatasetService, Depends(get_dataset_service)],
+) -> Episode:
+    """Trim an episode by rewriting data/meta only, preserving its MP4 files."""
+    dataset = await dataset_service.get_dataset_by_id(dataset_id)
+    dataset_client = get_internal_read_dataset(dataset)
+    if not isinstance(dataset_client, InternalLeRobotDataset):
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Episode editing is unsupported")
+    try:
+        dataset_client.apply_episode_edits(
+            trim_episode_index=episode_index,
+            start_frame=payload.start_frame,
+            end_frame=payload.end_frame,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    episode = dataset_client.find_episode(episode_index)
+    if episode is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found after trim")
+    return episode
 
 
 @router.get("/{dataset_id}/video/{video_path:path}")
