@@ -6,6 +6,7 @@ import psutil
 from loguru import logger
 
 from workers.dataset_import_worker import DatasetImportWorker
+from workers.dataset_optimization_worker import DatasetOptimizationWorker
 from workers.training_worker import TrainingWorker
 
 if TYPE_CHECKING:
@@ -47,8 +48,13 @@ class Scheduler:
         )
         dataset_import_proc.daemon = False
         dataset_import_proc.start()
+        dataset_optimization_proc = DatasetOptimizationWorker(
+            stop_event=self.mp_stop_event, event_queue=self.event_queue
+        )
+        dataset_optimization_proc.daemon = False
+        dataset_optimization_proc.start()
 
-        self.processes.extend([training_proc, dataset_import_proc])
+        self.processes.extend([training_proc, dataset_import_proc, dataset_optimization_proc])
 
     def shutdown(self) -> None:
         """Shutdown all processes gracefully"""

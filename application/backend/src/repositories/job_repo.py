@@ -95,6 +95,26 @@ class JobRepository(BaseRepository):
 
         return await self.get_by_id(job_id)
 
+    async def claim_pending_job_by_type(self, job_type: JobType) -> Job | None:
+        query = (
+            select(JobDB.id)
+            .where(JobDB.type == job_type, JobDB.status == JobStatus.PENDING)
+            .order_by(JobDB.created_at.asc())
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        job_id = result.scalar_one_or_none()
+        if job_id is None:
+            return None
+        claim = (
+            update(JobDB)
+            .where(JobDB.id == job_id, JobDB.status == JobStatus.PENDING)
+            .values(status=JobStatus.RUNNING)
+        )
+        await self.db.execute(claim)
+        await self.db.commit()
+        return await self.get_by_id(job_id)
+
     async def get_jobs_by_type(self, project_id: UUID, job_type: JobType) -> list[Job]:
         return await self.get_all(
             extra_filters={"project_id": self._id_to_str(project_id), "type": job_type},

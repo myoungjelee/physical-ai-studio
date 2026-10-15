@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_serializer
 
 from schemas.base_job import BaseJob, JobType
 from schemas.dataset_import_job import DatasetImportJobPayload
+from schemas.dataset_optimization_job import DatasetOptimizationJobPayload
 from schemas.hardware import DeviceType
 from training.job import PEFT_POLICIES, SNAPFLOW_POLICIES
 
@@ -403,10 +404,15 @@ class DatasetImportJob(BaseJob):
     payload: DatasetImportJobPayload
 
 
-JobPayload = LocalTrainJobPayload | RemoteTrainJobPayload | DatasetImportJobPayload
+class DatasetOptimizationJob(BaseJob):
+    type: Literal[JobType.DATASET_OPTIMIZATION] = JobType.DATASET_OPTIMIZATION  # type: ignore[valid-type]
+    payload: DatasetOptimizationJobPayload
+
+
+JobPayload = LocalTrainJobPayload | RemoteTrainJobPayload | DatasetImportJobPayload | DatasetOptimizationJobPayload
 
 Job = Annotated[
-    TrainJob | DatasetImportJob,
+    TrainJob | DatasetImportJob | DatasetOptimizationJob,
     Field(discriminator="type"),
 ]
 

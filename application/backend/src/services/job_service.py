@@ -9,7 +9,8 @@ from exceptions import DuplicateJobException, ResourceInUseError, ResourceNotFou
 from repositories import JobRepository
 from schemas import Job
 from schemas.base_job import JobStatus, JobType
-from schemas.job import JobPayload, RemoteTrainJobPayload, TrainJob, TrainJobPayload
+from schemas.dataset_optimization_job import DatasetOptimizationJobPayload
+from schemas.job import DatasetOptimizationJob, JobPayload, RemoteTrainJobPayload, TrainJob, TrainJobPayload
 from services.remote_trainer_service import RemoteTrainerService
 from services.training_targets import get_training_target_handler
 
@@ -63,12 +64,21 @@ class JobService:
             except IntegrityError:
                 raise ResourceNotFoundError(resource_type=ResourceType.PROJECT, resource_id=payload.project_id)
 
+    async def submit_dataset_optimization_job(self, project_id: UUID, payload: DatasetOptimizationJobPayload) -> Job:
+        return await self.repo.save(
+            DatasetOptimizationJob(project_id=project_id, payload=payload, message="Dataset optimization queued")
+        )
+
     async def get_pending_train_job(self) -> Job | None:
         return await self.repo.get_pending_job_by_type(JobType.TRAINING)
 
     async def get_pending_train_jobs(self) -> list[Job]:
         """Return pending training jobs in submission order."""
         return await self.repo.get_pending_jobs_by_type(JobType.TRAINING)
+
+    async def claim_pending_dataset_optimization_job(self) -> Job | None:
+        """Claim the oldest pending dataset optimization job."""
+        return await self.repo.claim_pending_job_by_type(JobType.DATASET_OPTIMIZATION)
 
     async def update_job_payload(
         self,

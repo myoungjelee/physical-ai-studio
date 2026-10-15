@@ -6,5 +6,6 @@ separate operation.
 """
 
 from .apply import EpisodeEdit, apply_episode_edits
+from .optimize import optimize_dataset
 
-__all__ = ["EpisodeEdit", "apply_episode_edits"]
+__all__ = ["EpisodeEdit", "apply_episode_edits", "optimize_dataset"]

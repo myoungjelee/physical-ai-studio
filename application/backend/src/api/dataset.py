@@ -9,12 +9,18 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from api.dependencies import get_dataset_download_service, get_dataset_service, get_episode_thumbnail_service
+from api.dependencies import (
+    get_dataset_download_service,
+    get_dataset_service,
+    get_episode_thumbnail_service,
+    get_job_service,
+)
 from api.utils import safe_archive_name
 from internal_datasets.lerobot.lerobot_dataset import InternalLeRobotDataset
 from internal_datasets.utils import get_internal_read_dataset
-from schemas import Dataset, Episode, EpisodeInfo, EpisodeTrimUpdate
-from services import DatasetDownloadService, DatasetService, EpisodeThumbnailService
+from schemas import Dataset, Episode, EpisodeInfo, EpisodeTrimUpdate, Job
+from schemas.dataset_optimization_job import DatasetOptimizationJobPayload
+from services import DatasetDownloadService, DatasetService, EpisodeThumbnailService, JobService
 
 router = APIRouter(prefix="/api/dataset", tags=["Dataset"])
 
@@ -143,6 +149,19 @@ async def trim_episode_of_dataset(
     if episode is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found after trim")
     return episode
+
+
+@router.post("/{dataset_id}:optimize", status_code=status.HTTP_202_ACCEPTED)
+async def optimize_dataset_endpoint(
+    dataset_id: UUID,
+    dataset_service: Annotated[DatasetService, Depends(get_dataset_service)],
+    job_service: Annotated[JobService, Depends(get_job_service)],
+) -> Job:
+    """Queue explicit video compaction for an edited LeRobot dataset."""
+    dataset = await dataset_service.get_dataset_by_id(dataset_id)
+    return await job_service.submit_dataset_optimization_job(
+        dataset.project_id, DatasetOptimizationJobPayload(dataset_id=dataset_id)
+    )
 
 
 @router.get("/{dataset_id}/video/{video_path:path}")
