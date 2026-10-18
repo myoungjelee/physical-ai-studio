@@ -239,7 +239,7 @@ async def test_progress_survives_missing_status_and_retry(context, aws, monkeypa
     await backend.train(context)
     updates = context.progress.call_args_list
     assert [call.args[0] for call in updates] == sorted(call.args[0] for call in updates)
-    assert any(call.kwargs.get("message") == "Training" for call in updates)
+    assert any("AWS Batch RUNNING: Training" in call.kwargs.get("message", "") for call in updates)
 
 
 @pytest.mark.asyncio
@@ -338,3 +338,88 @@ def test_log_read_failures_do_not_fail_training(connection, monkeypatch, code) -
     backend._relay_logs(
         {"container": {"logStreamName": "stream", "logConfiguration": {"options": {"awslogs-group": "logs"}}}}
     )
+
+
+@pytest.mark.asyncio
+async def test_training_updates_replace_dataset_ready_and_preserve_loss(context, aws, monkeypatch) -> None:
+    backend = await get_training_backend(context.payload)
+    container = {"image": "ghcr.io/example/trainer:submitted-version"}
+    ready = BatchJobStatus(status="running", message="Dataset ready", updated_at=datetime.now(UTC))
+    training = ready.model_copy(update={"message": None, "extra_info": {"train/loss_step": 6.45}})
+    monkeypatch.setattr(
+        backend,
+        "_poll",
+        MagicMock(
+            side_effect=[
+                ({"status": "RUNNING", "container": container}, ready),
+                ({"status": "RUNNING", "container": container}, training),
+                ({"status": "RUNNING", "container": container}, training),
+                ({"status": "SUCCEEDED", "container": container}, training),
+            ]
+        ),
+    )
+    monkeypatch.setattr(f"{MODULE}.asyncio.sleep", AsyncMock())
+
+    await backend._wait(context, "batch-job-id", "jobs/studio-job-id")
+
+    updates = context.progress.call_args_list
+    assert "Dataset ready" in updates[0].kwargs["message"]
+    assert "AWS Batch RUNNING: Training model" in updates[1].kwargs["message"]
+    assert "AWS Batch RUNNING: Training model" in updates[2].kwargs["message"]
+    assert updates[2].kwargs["extra_info"]["train/loss_step"] == 6.45
+    assert updates[2].kwargs["extra_info"]["aws_batch"]["job_id"] == "batch-job-id"
+    assert all(update.kwargs["extra_info"]["aws_batch"]["image"] == container["image"] for update in updates)
+
+
+def test_waiting_for_compute_includes_elapsed_time_and_aws_reason(monkeypatch) -> None:
+    monkeypatch.setattr(f"{MODULE}.time.time", lambda: 1000)
+    message, details = AwsBatchTrainingBackend._execution_progress(
+        {"status": "RUNNABLE", "createdAt": 640000, "statusReason": "CAPACITY:INSUFFICIENT_INSTANCE_CAPACITY"}, None, {}
+    )
+    assert "Waiting for compute capacity and scheduling" in message
+    assert "6m 00s elapsed" in message
+    assert "CAPACITY:INSUFFICIENT_INSTANCE_CAPACITY" in message
+    assert details["elapsed_seconds"] == 360
+
+
+@pytest.mark.parametrize(
+    "task,expected",
+    [
+        ({}, "Starting container; image download and setup may take several minutes"),
+        ({"pullStartedAt": datetime.now(UTC)}, "Pulling container image"),
+        (
+            {"pullStartedAt": datetime.now(UTC), "pullStoppedAt": datetime.now(UTC)},
+            "Container image downloaded; preparing startup",
+        ),
+    ],
+)
+def test_image_pull_is_reported_only_when_ecs_confirms_it(task, expected) -> None:
+    message, _ = AwsBatchTrainingBackend._execution_progress({"status": "STARTING"}, None, task)
+    assert message == f"AWS Batch STARTING: {expected}"
+
+
+def test_stale_trainer_report_is_distinguished_from_current_batch_state(monkeypatch) -> None:
+    monkeypatch.setattr(f"{MODULE}.time.time", lambda: 1000)
+    status = BatchJobStatus(status="running", message="Dataset ready", updated_at=datetime.fromtimestamp(640, UTC))
+    message, details = AwsBatchTrainingBackend._execution_progress({"status": "RUNNING"}, status, {})
+    assert "last trainer update 6m 00s ago" in message
+    assert details["trainer_update_age_seconds"] == 360
+
+
+def test_startup_diagnostics_use_the_ecs_task_cluster(connection, monkeypatch) -> None:
+    backend = AwsBatchTrainingBackend(connection)
+    ecs = MagicMock()
+    ecs.describe_tasks.return_value = {"tasks": [{"lastStatus": "PENDING"}]}
+    monkeypatch.setattr(backend, "_client", lambda service: ecs)
+    arn = "arn:aws:ecs:us-east-1:123:task/batch-cluster/task-id"
+
+    assert backend._starting_task({"container": {"taskArn": arn}}) == {"lastStatus": "PENDING"}
+    ecs.describe_tasks.assert_called_once_with(cluster="batch-cluster", tasks=[arn])
+
+
+def test_missing_startup_permissions_do_not_block_batch_monitoring(connection, monkeypatch) -> None:
+    backend = AwsBatchTrainingBackend(connection)
+    ecs = MagicMock()
+    ecs.describe_tasks.side_effect = ClientError({"Error": {"Code": "AccessDeniedException"}}, "DescribeTasks")
+    monkeypatch.setattr(backend, "_client", lambda service: ecs)
+    assert backend._starting_task({"container": {"taskArn": "arn:aws:ecs:us-east-1:123:task/cluster/id"}}) == {}

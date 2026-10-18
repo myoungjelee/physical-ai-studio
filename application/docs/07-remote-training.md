@@ -131,6 +131,8 @@ Studio uploads the dataset snapshot and training specification to S3, submits a 
 
 Container stdout and stderr are collected in CloudWatch Logs and relayed into Studio's job logs. Live metric snapshots are published to S3 and streamed through Studio's metrics endpoint. Existing deployments need a CloudFormation stack update to grant the Studio role `logs:GetLogEvents` on the trainer log group, and a rebuilt trainer image to publish live metrics. A job remains running while AWS Batch reports it running, unless the trainer explicitly reports failure; a traceback alone does not imply that the container exited.
 
+Studio refreshes the Batch lifecycle message every five seconds, including elapsed time, scheduling reasons, and the age of the latest trainer report. Batch-level training updates without a message display **Training model** rather than retaining an earlier **Dataset ready** message. During startup, ECS task diagnostics distinguish image pulling from container setup when AWS reports those timestamps; update existing stacks to grant the Studio role `ecs:DescribeTasks` for this detail. Without that permission, Studio still reports the Batch state. AWS does not expose an image download percentage.
+
 ## Remove an AWS trainer
 
 Delete the CloudFormation stack when training is complete. Removing the trainer from Studio does not delete the AWS resources or stop AWS charges.

@@ -202,6 +202,13 @@ Resources:
                   - batch:DescribeJobQueues
                   - batch:DescribeJobs
                 Resource: "*"
+        - PolicyName: StudioBatchStartupDiagnostics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/*
         - PolicyName: StudioTrainerLogs
           PolicyDocument:
             Version: "2012-10-17"

@@ -107,6 +107,33 @@ describe('TrainingRow', () => {
         expect(screen.getByRole('progressbar')).toBeInTheDocument();
     });
 
+    it.each([
+        ['RUNNING', 'Training'],
+        ['STARTING', 'Starting'],
+        ['RUNNABLE', 'Waiting for compute'],
+    ])('shows a concise Batch %s badge with the full status on hover', (state, label) => {
+        const message = `AWS Batch ${state}: Training model · 22m 14s elapsed`;
+        renderTrainingRow({
+            message,
+            payload: {
+                ...localJob.payload,
+                training_target: 'remote',
+                remote_trainer_id: remoteTrainer.id,
+                remote_trainer_url: 'aws-batch://us-east-1/training-jobs',
+            },
+        });
+
+        expect(screen.getByText(label)).toBeInTheDocument();
+        expect(screen.getByText('AWS Batch')).toBeInTheDocument();
+        expect(screen.getByTitle(message)).toBeInTheDocument();
+        expect(screen.queryByText(message)).not.toBeInTheDocument();
+    });
+
+    it('preserves the status message for non-Batch trainers', () => {
+        renderTrainingRow({ message: 'Preparing training data' });
+        expect(screen.getByText('Preparing training data')).toBeInTheDocument();
+    });
+
     it('badges a disconnected remote job without extra text', () => {
         renderTrainingRow({
             message: 'Trainer unreachable; waiting to reconnect',
@@ -151,6 +178,26 @@ describe('TrainingRow', () => {
 
         await waitFor(() => expect(screen.getByTestId('trainer-cell')).toHaveTextContent(remoteTrainer.name));
     });
+
+    it.each(['running', 'completed', 'failed'] as const)('shows the recorded Batch image for a %s job', (status) => {
+        const image = 'ghcr.io/example/physicalai-trainer-cuda:job-version';
+        renderTrainingRow({
+            status,
+            payload: { ...localJob.payload, training_target: 'remote', remote_trainer_id: remoteTrainer.id },
+            extra_info: { aws_batch: { image } },
+        });
+
+        expect(screen.getByTestId('trainer-cell')).toHaveTextContent(`Trainer image: ${image}`);
+    });
+
+    it.each([null, {}, { aws_batch: null }, { aws_batch: { image: 42 } }])(
+        'omits image details when image metadata is unavailable or invalid (%j)',
+        (extra_info) => {
+            renderTrainingRow({ extra_info });
+
+            expect(screen.getByTestId('trainer-cell')).not.toHaveTextContent('Trainer image:');
+        }
+    );
 
     it.each([undefined, 1])(
         'shows remote trainer and selected GPU when multiple GPUs exist (index %s)',

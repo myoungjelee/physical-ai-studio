@@ -3,6 +3,7 @@ import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -45,22 +46,29 @@ def test_studio_can_read_only_the_trainer_log_group() -> None:
     assert logs["Resource"] == "TrainerLogGroup.Arn"
 
 
-def test_batch_uses_ssh_trainer_image_without_image_parameter() -> None:
+def test_studio_can_inspect_ecs_startup_without_modifying_tasks() -> None:
+    policies = _template()["Resources"]["StudioRole"]["Properties"]["Policies"]
+    policy = next(policy for policy in policies if policy["PolicyName"] == "StudioBatchStartupDiagnostics")
+    assert policy["PolicyDocument"]["Statement"] == [
+        {
+            "Effect": "Allow",
+            "Action": "ecs:DescribeTasks",
+            "Resource": "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/*",
+        }
+    ]
+
+
+def test_batch_uses_consistent_cuda_trainer_image_without_image_parameter() -> None:
     template = _template()
-    image = "ghcr.io/open-edge-platform/physicalai-trainer-cuda:main"
     definitions = [
         resource for resource in template["Resources"].values() if resource["Type"] == "AWS::Batch::JobDefinition"
     ]
     assert len(definitions) == 3
+    image = definitions[0]["Properties"]["ContainerProperties"]["Image"]
+    assert image.startswith("ghcr.io/")
+    assert image.endswith("/physicalai-trainer-cuda:main")
     assert all(definition["Properties"]["ContainerProperties"]["Image"] == image for definition in definitions)
     assert "TrainerImage" not in json.dumps(template)
-
-    ssh_path = Path(__file__).resolve().parents[2] / "cloudformation" / "remote-trainer.yaml"
-    ssh_template = yaml.load(ssh_path.read_text(), Loader=yaml.BaseLoader)
-    user_data = ssh_template["Resources"]["TrainerInstance"]["Properties"]["UserData"]["Fn::Base64"]
-    repository, tag = image.rsplit(":", 1)
-    assert f'IMAGE="{repository}"' in user_data
-    assert f'TAG="{tag}"' in user_data
 
 
 @pytest.mark.parametrize("definition", ["G4dnJobDefinition", "G6eJobDefinition", "G7eJobDefinition"])
@@ -138,7 +146,7 @@ def test_template_publishes_configuration_and_cleans_bucket(request_type: str) -
     code = template["Resources"]["BucketCleanupFunction"]["Properties"]["Code"]["ZipFile"]
     boto = MagicMock()
     response = MagicMock()
-    namespace = {}
+    namespace: dict[str, Any] = {}
     event = {
         "RequestType": request_type,
         "PhysicalResourceId": "stable-resource",

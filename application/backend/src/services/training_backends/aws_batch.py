@@ -39,6 +39,7 @@ class AwsBatchTrainingBackend:
         self._session_created = 0.0
         self._log_token: str | None = None
         self._log_warning_shown = False
+        self._task_warning_shown = False
 
     def _client(self, service: str) -> Any:
         if self._session is None or time.monotonic() - self._session_created > 600:
@@ -60,6 +61,7 @@ class AwsBatchTrainingBackend:
             )
             try:
                 await self._check_stop(context, None)
+                context.progress(5, message="Uploading dataset snapshot to S3")
                 try:
                     await asyncio.to_thread(self._upload_inputs, context, prefix, archive)
                 except _TransferStopped:
@@ -68,6 +70,7 @@ class AwsBatchTrainingBackend:
             finally:
                 cleanup_staged_archive(archive)
             await self._check_stop(context, None)
+            context.progress(10, message="Submitting AWS Batch job")
             job_id = await asyncio.to_thread(self._submit, context, prefix)
             if context.on_remote_job_id is not None:
                 try:
@@ -153,7 +156,8 @@ class AwsBatchTrainingBackend:
 
     async def _wait(self, context: TrainingContext, job_id: str, prefix: str) -> None:
         last_contact = time.monotonic()
-        last_update: BatchJobStatus | None = None
+        last_phase: tuple[str, str] | None = None
+        extra_info: dict[str, Any] = {}
         progress = max(10, context.job.progress or 0)
         while True:
             await self._check_stop(context, job_id)
@@ -162,14 +166,23 @@ class AwsBatchTrainingBackend:
             except (BotoCoreError, ClientError):
                 if time.monotonic() - last_contact > 300:
                     raise
+                context.progress(progress, message="AWS Batch status unavailable; retrying", extra_info=extra_info)
                 await asyncio.sleep(5)
                 continue
             last_contact = time.monotonic()
             await asyncio.to_thread(self._relay_logs, job)
-            if status is not None and status != last_update:
+            if status is not None:
                 progress = max(progress, min(95, 10 + round(status.progress * 0.85)))
-                context.progress(progress, message=status.message, extra_info=status.extra_info)
-                last_update = status
+            task = await asyncio.to_thread(self._starting_task, job) if job["status"] == "STARTING" else {}
+            message, details = self._execution_progress(job, status, task)
+            details["job_id"] = job_id
+            extra_info = dict(status.extra_info or {}) if status else {}
+            extra_info["aws_batch"] = details
+            context.progress(progress, message=message, extra_info=extra_info)
+            phase = (job["status"], details["phase"])
+            if phase != last_phase:
+                logger.info("{} (job {})", message, job_id)
+                last_phase = phase
             if status and status.status == "failed":
                 if job["status"] not in {"FAILED", "SUCCEEDED"}:
                     await asyncio.to_thread(self._terminate, job_id, reason="Trainer reported failure")
@@ -181,9 +194,66 @@ class AwsBatchTrainingBackend:
                 if status and status.status in {"failed", "canceled"}:
                     raise RuntimeError(status.message or "AWS Batch training failed")
                 return
-            if status is None:
-                context.progress(progress, message=f"AWS Batch: {job['status'].lower()}")
             await asyncio.sleep(5)
+
+    def _starting_task(self, job: dict[str, Any]) -> dict[str, Any]:
+        task_arn = job.get("container", {}).get("taskArn")
+        if not task_arn or ":task/" not in task_arn:
+            return {}
+        resource = task_arn.split(":task/", 1)[1]
+        if "/" not in resource:
+            return {}
+        try:
+            response = self._client("ecs").describe_tasks(cluster=resource.rsplit("/", 1)[0], tasks=[task_arn])
+        except (BotoCoreError, ClientError) as error:
+            if not self._task_warning_shown:
+                logger.warning("Cannot read AWS Batch startup diagnostics: {}", error)
+                self._task_warning_shown = True
+            return {}
+        tasks = response.get("tasks", [])
+        return tasks[0] if tasks else {}
+
+    @staticmethod
+    def _execution_progress(
+        job: dict[str, Any], status: BatchJobStatus | None, task: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        state = job["status"]
+        phase = {
+            "SUBMITTED": "Job submitted",
+            "PENDING": "Waiting for job dependencies",
+            "RUNNABLE": "Waiting for compute capacity and scheduling",
+            "STARTING": "Starting container; image download and setup may take several minutes",
+            "RUNNING": "Container running; waiting for trainer progress",
+            "SUCCEEDED": "Container completed",
+            "FAILED": "Container failed",
+        }.get(state, state)
+        if state == "STARTING" and task.get("pullStartedAt"):
+            phase = (
+                "Container image downloaded; preparing startup"
+                if task.get("pullStoppedAt")
+                else "Pulling container image"
+            )
+        if state == "RUNNING" and status is not None:
+            phase = status.message or "Training model"
+        details: dict[str, Any] = {"state": state, "phase": phase}
+        if image := job.get("container", {}).get("image"):
+            details["image"] = image
+        message = f"AWS Batch {state}: {phase}"
+        if job.get("createdAt"):
+            elapsed = max(0, int(time.time() - job["createdAt"] / 1000))
+            details["elapsed_seconds"] = elapsed
+            message += f" · {elapsed // 60}m {elapsed % 60:02d}s elapsed"
+        if reason := job.get("statusReason"):
+            details["reason"] = reason
+            message += f" · {reason}"
+        if task.get("lastStatus"):
+            details["container_state"] = task["lastStatus"]
+        if status is not None:
+            age = max(0, int(time.time() - status.updated_at.timestamp()))
+            details["trainer_update_age_seconds"] = age
+            if state == "RUNNING" and age >= 60:
+                message += f" · last trainer update {age // 60}m {age % 60:02d}s ago"
+        return message, details
 
     def _relay_logs(self, job: dict[str, Any]) -> None:
         container = job.get("container", {})
