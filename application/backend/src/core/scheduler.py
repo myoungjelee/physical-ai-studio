@@ -12,7 +12,7 @@ from loguru import logger
 
 from db import get_async_db_session_ctx
 from schemas.base_job import JobStatus, JobType
-from schemas.job import DatasetImportJob, TrainJobPayloadAdapter
+from schemas.job import DatasetImportJob, RemoteTrainJobPayload, TrainJobPayloadAdapter
 from services.dataset_import.service import DatasetImportService
 from services.event_processor import EventType
 from services.job_service import JobService
@@ -86,7 +86,10 @@ class Scheduler:
                 self.mp_stop_event.wait(0.5)
         finally:
             self._shutdown_processes()
-            await self._recover_jobs()
+            try:
+                await self._recover_jobs()
+            except Exception:
+                logger.exception("Shutdown recovery failed; abandoned jobs will be reconciled on the next startup")
 
     @staticmethod
     def _target_is_busy(target: str, active: Mapping[str, object]) -> bool:
@@ -110,18 +113,15 @@ class Scheduler:
                 self._start_job("dataset_import", job)
 
     def cancel_job(self, job_id: UUID) -> None:
-        """Signal only this job; completed or already-reaped jobs need no signal."""
-        event = self._cancel_events.get(job_id)
-        if event is not None:
-            event.set()
+        """Signal this job, retaining requests until a remote worker can reattach."""
+        self._cancel_events.setdefault(job_id, mp.Event()).set()
 
     def _start_job(self, target: str, job: Job) -> None:
         if self.mp_stop_event.is_set():
             return
         cancel_event = None
         if job.type == JobType.TRAINING:
-            cancel_event = mp.Event()
-            self._cancel_events[job.id] = cancel_event
+            cancel_event = self._cancel_events.setdefault(job.id, mp.Event())
         process = mp.Process(
             target=_run_job,
             args=(job.type, job.id, self.mp_stop_event, cancel_event, self.event_queue),
@@ -138,21 +138,43 @@ class Scheduler:
                 continue
             if process.pid is not None:
                 process.join()
-            self._cancel_events.pop(job.id, None)
-            # A preparation failure can leave training PENDING rather than RUNNING.
+            reattaching = False
+            # Startup failures can leave training PENDING before the worker claims it.
             if job.type == JobType.TRAINING:
                 async with get_async_db_session_ctx() as session:
                     service = JobService(session)
                     current_jobs = await service.get_jobs_by_ids([job.id])
-                    if current_jobs and current_jobs[0].status == JobStatus.PENDING and not self.mp_stop_event.is_set():
+                    if current_jobs:
+                        current = current_jobs[0]
+                        reattaching = (
+                            current.status in {JobStatus.PENDING, JobStatus.RUNNING}
+                            and isinstance(current.payload, RemoteTrainJobPayload)
+                            and current.payload.remote_job_id is not None
+                        )
+                    if (
+                        current_jobs
+                        and current_jobs[0].status == JobStatus.PENDING
+                        and not reattaching
+                        and not self.mp_stop_event.is_set()
+                    ):
                         failed = await service.update_job_status(
                             job.id, JobStatus.FAILED, message="Training worker exited before completing the job"
                         )
                         self.event_queue.put((EventType.JOB_UPDATE, failed))
+            if not reattaching:
+                self._cancel_events.pop(job.id, None)
             if process.pid is not None:
                 process.close()
             del self.processes[target]
             await self._recover_jobs()
+
+        unassigned = set(self._cancel_events.copy()) - {job.id for _, job in self.processes.values()}
+        if unassigned:
+            async with get_async_db_session_ctx() as session:
+                jobs = await JobService(session).get_jobs_by_ids(list(unassigned))
+            waiting = {job.id for job in jobs if job.status in {JobStatus.PENDING, JobStatus.RUNNING}}
+            for job_id in unassigned - waiting:
+                self._cancel_events.pop(job_id, None)
 
     async def _recover_jobs(self) -> None:
         """Reconcile abandoned jobs without touching any live worker's job."""

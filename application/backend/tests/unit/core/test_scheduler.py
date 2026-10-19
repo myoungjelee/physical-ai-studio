@@ -99,6 +99,20 @@ async def test_startup_recovery_failure_is_retried_before_scheduling(scheduler):
 
 
 @pytest.mark.anyio
+async def test_shutdown_recovery_failure_does_not_escape_the_scheduler_thread(scheduler):
+    scheduler.mp_stop_event.set()
+    with (
+        patch.object(
+            scheduler, "_recover_jobs", AsyncMock(side_effect=RuntimeError("database unavailable"))
+        ) as recover,
+        patch.object(scheduler, "_shutdown_processes") as shutdown,
+    ):
+        await scheduler._run_loop()
+    recover.assert_awaited_once()
+    shutdown.assert_called_once()
+
+
+@pytest.mark.anyio
 async def test_schedules_training_per_target_alongside_one_import(scheduler, services):
     jobs, imports, _ = services
     trainer = uuid4()
@@ -183,6 +197,33 @@ async def test_reap_releases_target_clears_interrupt_and_starts_next_job(schedul
         await scheduler._schedule_jobs()
         assert scheduler.processes["local"][1].id == second.id
         scheduler._shutdown_processes()
+
+
+@pytest.mark.anyio
+async def test_cancellation_after_completion_and_reaping_is_pruned(scheduler, services):
+    job = _training_job()
+    job.status = JobStatus.COMPLETED
+    services[0].get_jobs_by_ids.return_value = [job]
+    process = MagicMock()
+    process.is_alive.return_value = False
+    scheduler.processes["local"] = (process, job)
+    await scheduler._reap_processes()
+    scheduler.cancel_job(job.id)
+    assert scheduler._cancel_events[job.id].is_set()
+    await scheduler._reap_processes()
+    assert not scheduler._cancel_events
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [JobStatus.PENDING, JobStatus.RUNNING, JobStatus.CANCELED, None])
+async def test_unassigned_cancellation_is_retained_only_for_nonterminal_jobs(scheduler, services, status):
+    job = _training_job(trainer_id=uuid4())
+    if status is not None:
+        job.status = status
+    services[0].get_jobs_by_ids.return_value = [job] if status is not None else []
+    scheduler.cancel_job(job.id)
+    await scheduler._reap_processes()
+    assert (job.id in scheduler._cancel_events) == (status in {JobStatus.PENDING, JobStatus.RUNNING})
 
 
 @pytest.mark.anyio

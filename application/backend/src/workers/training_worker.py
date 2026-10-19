@@ -50,8 +50,8 @@ class TrainingWorker(BaseProcessWorker):
         if self.should_stop():
             return
         async with get_async_db_session_ctx() as session:
-            job = await JobService(session, RemoteTrainerService(session)).get_job_by_id(self.job_id)
-        if job.status == JobStatus.PENDING:
+            job = await JobService(session, RemoteTrainerService(session)).claim_pending_train_job(self.job_id)
+        if job is not None:
             await self._run_training_job(job, TrainJobPayloadAdapter.validate_python(job.payload))
 
     async def _run_training_job(self, job: Job, payload: TrainJobPayload) -> None:
@@ -164,6 +164,11 @@ class TrainingWorker(BaseProcessWorker):
                 should_cancel_job=self.cancel_event.is_set,
             )
 
+            # A reattached remote job still needs its backend to cancel the remote execution.
+            if self.cancel_event.is_set() and (
+                payload.training_target is TrainingTarget.LOCAL or not payload.remote_job_id
+            ):
+                raise TrainingCanceledError("Training canceled during preparation")
             backend = await get_training_backend(payload)
             await backend.train(context)
             # The local backend stops cooperatively without raising; treat a

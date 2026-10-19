@@ -552,17 +552,20 @@ class TestAssignedJob:
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("status", [JobStatus.PENDING, JobStatus.CANCELED, JobStatus.COMPLETED])
-    async def test_runs_only_assigned_pending_job(self, worker, status) -> None:
+    async def test_runs_only_assigned_claimed_job(self, worker, status) -> None:
         job = _make_job(_make_payload())
         job.status = status
         worker.job_id = job.id
         with (
-            patch(f"{MODULE}.JobService.get_job_by_id", AsyncMock(return_value=job)) as get_job,
+            patch(
+                f"{MODULE}.JobService.claim_pending_train_job",
+                AsyncMock(return_value=job if status == JobStatus.PENDING else None),
+            ) as claim_job,
             patch.object(worker, "_run_training_job", AsyncMock()) as run_job,
         ):
             await worker.run_loop()
 
-        get_job.assert_awaited_once_with(job.id)
+        claim_job.assert_awaited_once_with(job.id)
         assert run_job.await_count == (1 if status == JobStatus.PENDING else 0)
 
     @pytest.mark.anyio
