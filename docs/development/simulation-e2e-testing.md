@@ -32,6 +32,12 @@ HTTP health polling runs on a separate thread, not inside the control tick callb
 
 An isolated CPU-only calibration on the GPU server passed all five scripted episodes at 100% and all five no-action episodes at 0%, with both dependencies attested at the intended revision. OSMesa cameras still measured about 2 FPS while physics stayed near real time. Logs and `controls.json` are under `~/sim-e2e-weekly-validation/results/` on that server. This validates the scoring protocol, not hardware-rendered camera throughput or learned-policy quality.
 
+### ACT export parity diagnostic
+
+A bounded CPU-only ACT probe compared native predictions with OpenVINO predictions on five recorded conveyor observations, using Runtime's real camera-input conversion. It exposed integer interpolation rounding when uint8 camera bytes were resized before float conversion. ACT export recipes now use the existing `to_float_tensor` processor before `resize`, matching training's float resize order. Re-export existing checkpoints to receive this metadata fix; model weights and state-dict keys are unchanged.
+
+On a two-step diagnostic model, maximum action difference fell from approximately 0.115 to 0.00011. This validates preprocessing/export parity for those samples, not sorting quality or the old trained ACT checkpoint. Reports and the reproduction script are under `~/sim-e2e-weekly-validation/act-parity/` and `act-parity.py` on the GPU server. Neither GPU was used or reconfigured for this probe.
+
 ## Qualifying a checkpoint
 
 `library/configs/simulation-e2e/checkpoints.json` deliberately starts with `null` for each policy. No usable task-performance baseline has been demonstrated yet. To qualify one:
