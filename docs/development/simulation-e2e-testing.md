@@ -1,17 +1,78 @@
 # Simulation library E2E testing
 
-The opt-in test in `library/tests/integration/test_simulation_training_e2e.py` checks the library path from a genuine simulation recording through policy training, checkpointing, OpenVINO export, and live Runtime inference in MuJoCo. It does not start Studio. The weekly workflow is `.github/workflows/simulation-library-e2e.yml`; expensive simulation runs are excluded from the usual PR tests.
+The simulation suite separates **training regression**, **deployment wiring**, and **task quality**. Moving the arm is not a sorting success. The previous three-epoch ACT run scored 0% (100 missed items), with about 2 Hz control against 30 Hz demonstrations; those results do not qualify a checkpoint.
 
-## Scenarios and data
+## Weekly checks
 
-The scheduled scenario is `conveyor_sort`. Its pinned 50-episode [recording](https://huggingface.co/datasets/Albertvh97/conveyor-sort-sim-demos) is revision `6a949360761fee17089fbaaf8bc53f59715cb575`, with overview and wrist cameras and a 0.04 m/s belt speed. The test rejects a mismatched scene or incompatible dataset features. It scores **all completed conveyor episodes** using `correct / (correct + wrong + missed)`; at least one full scored episode must finish. The `single_pick_place` path is covered offline, but is not scheduled until genuine pick-place demonstrations have been published.
+`.github/workflows/simulation-library-e2e.yml` runs weekly/manual on one self-hosted GPU. It attempts all six policies: ACT, MolmoAct2, Pi0.5, RLDX1, SmolVLA, and XR0. Cosmos3 remains excluded until an embodiment is configured.
 
-The library and MuJoCo plugin both use Runtime revision `91338224`. The weekly matrix selects `act`, `molmoact2`, `pi05`, `rldx1`, `smolvla`, and `xr0` for the conveyor. Cosmos3 is omitted until its required `embodiment` can be configured; the remaining policies have not all been validated live. The weekly matrix runs on the existing GPU runner with one job at a time.
+1. **Simulator controls:** compare scripted autopilot (`drive`) and no actions (`off`) on the same five seeds at 0.04 m/s. The expert must outperform no actions. Failure blocks policy quality evaluation, not training regression.
+2. **Training regression:** run 20 optimizer steps at batch size 2; save and reload a checkpoint with restricted unpickling. No simulator is needed. This does not establish model quality.
+3. **Export and evaluation:** load a qualified checkpoint from the repository-reviewed manifest, verify its SHA-256, export with the current library to OpenVINO, and run five completed conveyor episodes with Runtime. The 180-second per-episode deadline is a failure safeguard, not a scoring window.
 
-## Running the test
+Job limits are 20 minutes for training and 30 minutes for evaluation/controls. The serial six-policy matrix has a maximum configured budget of approximately six hours plus setup/report overhead. Cache misses or slow hardware can hit these limits; an incomplete job is not a pass.
 
-Install the library with the `tests`, `policies`, `sim-e2e`, and appropriate hardware extras. Start the MuJoCo owner for the chosen scene, then set `SIM_E2E_DATASET_DIR`, `SIM_E2E_HTTP_URL`, `SIM_E2E_OWNER`, `SIM_E2E_POLICY`, `SIM_E2E_SCENE`, and `SIM_E2E_OUTPUT_DIR`. For the published conveyor dataset, set the owner's belt speed to 0.04 m/s and map the dataset gripper camera to the simulator wrist camera with `SIM_E2E_CAMERA_MAP='{"gripper":"wrist"}'`. Run `pytest tests/integration/test_simulation_training_e2e.py -k conveyor_sort` from `library/`.
+The report shows training/reload, export/actions, timing, and quality separately. A missing qualified checkpoint is explicitly **baseline unavailable**, not a quality pass. Logs, JUnit, scores, timing, and short inference videos are retained for 14 days; weekly checkpoints and exports are deleted to bound storage.
 
-The test constructs policies with `get_policy(policy_name, source="physicalai")`, except for two A100 40 GB training overrides at batch size 2: MolmoAct2 enables LoRA (default rank 64) and gradient checkpointing; XR0 freezes its vision encoder and decays its learning rate over the full training budget rather than its default 30,000 steps. Two-step training probes passed with these settings, but export and live rollouts have not been validated on the A100. The other policies use constructor defaults. Training defaults to **three full epochs** over the 50-episode recording (62,866 samples; 94,299 optimizer steps at batch size 2). Set `SIM_E2E_TRAIN_STEPS=2` to run a short wiring smoke test instead. Each policy is trained and exported once, then its exported model is tested in inference trials. Each trial stops after `SIM_E2E_ROLLOUT_SECONDS` of wall time (120 seconds by default). Set `SIM_E2E_ROLLOUTS` to repeat inference trials (one by default; five in the weekly workflow). The simulator resets before each trial. A pass requires sent policy actions, observable joint motion, and—for conveyor—a scored episode in each trial. `result.json` includes per-trial episodes, scores and action/motion counts, the mean trial score, training steps, elapsed training time, and final training loss (when logged). The weekly run publishes a policy comparison table with training time in hours in its GitHub Actions summary; missing results are marked as such. Checkpoints are saved after each epoch rather than every 1,000 steps, and exported weights remain in `SIM_E2E_OUTPUT_DIR`. The self-hosted job allows up to five days per policy; GitHub will still terminate a job that exceeds that limit. Three epochs do not guarantee useful sorting performance—judge that from the rollout scores.
+### A100 settings
 
-Set `SIM_E2E_RECORD_VIDEO=true` (or the weekly workflow's manual `record_video` input) to record simulator cameras side by side during inference; this requires FFmpeg and is off by default. Set `SIM_E2E_MIN_SUCCESS` only after measuring a policy/scenario baseline. A 0/10 outcome can still pass because the test has no task-performance threshold by default. Previous live ACT smoke runs used the earlier Runtime revision; the new pin has not been live-validated yet.
+MolmoAct2 uses rank-64 LoRA with gradient checkpointing. XR0 freezes its vision encoder and derives learning-rate decay from the training budget. Other policies use constructor defaults. Batch size is 2 throughout. These settings passed short training probes on a 40 GB A100; XR0 and Pi0.5 have little spare memory.
+
+Rendering uses EGL rather than software OSMesa, which was observed delivering only about 2 FPS. Configure `SIM_E2E_CUDA_VISIBLE_DEVICES` as a repository variable to select the physical GPU (`0` by default). Provide `HF_TOKEN` as a repository secret with access to gated PaliGemma tokenizer assets. GPU selection does not combine memory across cards.
+
+Both installed Runtime and MuJoCo plugin commits are checked against `91338224c67f0d17f166eb062e3ac9a6762db784` before expensive work. Mixed installations fail rather than silently evaluating another deployment stack. This check caught an inconsistent library lockfile that still resolved Runtime to `f90b3767` despite the configured `91338224` source; the resolved lock entry is now corrected and regression-tested.
+
+## Reproducible episodes
+
+The recording is the 50-episode [conveyor dataset](https://huggingface.co/datasets/Albertvh97/conveyor-sort-sim-demos), pinned at `6a949360761fee17089fbaaf8bc53f59715cb575`. It contains 62,866 samples, overview/wrist cameras, six-dimensional state/actions, and a 0.04 m/s belt. Its recording seed was not captured, so the fixed evaluation seeds cannot be certified as unseen during collection.
+
+Each trial pauses the conveyor during setup, fixes a seed, resets, verifies queued commands have taken effect, connects the policy runtime, then resumes the belt. Do not disable episode auto-reset during scoring: in this simulator that also pauses the belt. Scoring stops on the first completed episode and validates all 10 items as correct/wrong/missed. The score is `correct / (correct + wrong + missed)`.
+
+HTTP health polling runs on a separate thread, not inside the control tick callback. Results record wall-clock control frequency, inference p95 latency, unique camera timestamps, simulator speed/camera rates, seeds, checkpoint identity, and code/dependency provenance. The timing gate requires at least 80% of the recorded control and camera frequency (24 Hz), with simulator real-time factor between 0.9 and 1.1. It includes startup-to-first-action delay after a paused warmup and reseed/reset. Investigate camera blocking, inference cost, action units/order, and preprocessing parity when timing or task scores regress; do not slow the belt to make a policy pass.
+
+An isolated CPU-only calibration on the GPU server passed all five scripted episodes at 100% and all five no-action episodes at 0%, with both dependencies attested at the intended revision. OSMesa cameras still measured about 2 FPS while physics stayed near real time. Logs and `controls.json` are under `~/sim-e2e-weekly-validation/results/` on that server. This validates the scoring protocol, not hardware-rendered camera throughput or learned-policy quality.
+
+## Qualifying a checkpoint
+
+`library/configs/simulation-e2e/checkpoints.json` deliberately starts with `null` for each policy. No usable task-performance baseline has been demonstrated yet. To qualify one:
+
+1. Train a candidate outside the weekly gate and retain its training provenance.
+2. Confirm simulator controls and compare native versus exported predictions on representative recorded observations. Check camera views/order, normalization, action units, and timing.
+3. Evaluate the candidate repeatedly on the fixed protocol, inspect videos, and measure score variability.
+4. Publish the trusted Studio-generated `.ckpt` to a versioned model repository. Record its immutable revision, SHA-256, and a positive minimum score justified by measured results in the manifest, reviewed as code.
+
+Each entry has exactly these fields (placeholders below must be replaced):
+
+```json
+{
+  "repo_id": "organization/qualified-conveyor-policy",
+  "revision": "<40-character commit SHA>",
+  "filename": "model.ckpt",
+  "sha256": "<64-character SHA-256>",
+  "min_score": 0.5
+}
+```
+
+`0.5` is an example, not a measured threshold. Use a threshold supported by qualification trials and their variability. Only trusted, checksum-verified training artifacts belong in this manifest. Loading uses the allowlisted first-party policy class and `weights_only=True`; adapters merge through the existing export contract. Checkpoint reload, export, timing, and score must all pass; a 0% sorting score cannot pass qualification.
+
+## Long training and resuming
+
+`.github/workflows/simulation-library-training.yml` is manual-only, separate from the weekly gate. Select one policy to train three full epochs (94,299 optimizer steps at batch size 2). It saves `last.ckpt` every 1,000 steps and explicitly saves the exact final training state after a successful fit. A five-day self-hosted timeout still applies. Long and weekly workflows share a concurrency group to avoid competing on the same GPU.
+
+To resume, dispatch the same source revision and policy with `resume_run_id` pointing to a completed run of the training workflow. It verifies recorded policy/source identity and restores optimizer and scheduler state from the checkpoint. Checkpoint artifacts are large and expire after seven days; publish valuable candidates before expiry. These artifacts are not automatically promoted to weekly baselines.
+
+## Local commands
+
+From `library/`, install the `tests`, `policies`, `sim-e2e`, and appropriate hardware extras, then set `SIM_E2E_DATASET_DIR`, `SIM_E2E_POLICY`, and `SIM_E2E_OUTPUT_DIR`:
+
+```bash
+# Bounded training regression, no simulator required
+SIM_E2E_MODE=train uv run --no-sync pytest tests/integration/test_simulation_training_e2e.py -k test_train_export_and_run_in_simulation -v
+
+# Three full epochs; optionally set SIM_E2E_RESUME_CHECKPOINT to your trusted local last.ckpt
+SIM_E2E_MODE=train SIM_E2E_TRAIN_STEPS=-1 uv run --no-sync pytest tests/integration/test_simulation_training_e2e.py -k test_train_export_and_run_in_simulation -v
+```
+
+For evaluation/controls, separately start the pinned `physicalai-mujoco` owner in `conveyor_sort`, set `SIM_E2E_HTTP_URL` and `SIM_E2E_OWNER`, and select `-k test_simulator_controls` or set `SIM_E2E_MODE=evaluate` with `-k test_train_export_and_run_in_simulation`. Set `SIM_E2E_RECORD_VIDEO=true` to retain video (requires FFmpeg). `SIM_E2E_MODE=full` keeps the manual train→export→rollout route, but an unqualified candidate's score is not a quality pass.
+
+The active GPU1 long run launched before this split is unchanged, including its mixed Runtime/plugin installation. Its old wall-clock trials and software rendering are exploratory evidence, not results from the new seeded protocol. Hardware-rendered timing, full-size export parity, and learned checkpoint qualification still require live validation; offline unit tests alone cannot establish task performance.

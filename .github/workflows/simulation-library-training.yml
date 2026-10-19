@@ -1,0 +1,101 @@
+name: Simulation policy training
+
+on:
+  workflow_dispatch:
+    inputs:
+      policy:
+        description: Policy to train for three full epochs
+        type: choice
+        options: [act, molmoact2, pi05, rldx1, smolvla, xr0]
+        required: true
+      resume_run_id:
+        description: Optional completed run ID with a checkpoint artifact from this workflow
+        type: string
+        default: ""
+
+permissions: {}
+concurrency:
+  group: simulation-library-gpu
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: [self-hosted, Linux, X64, gpu]
+    timeout-minutes: 7200
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SIM_E2E_POLICY: ${{ inputs.policy }}
+      SIM_E2E_MODE: train
+      SIM_E2E_TRAIN_STEPS: -1
+      SIM_E2E_DATASET_DIR: ${{ github.workspace }}/.simulation-dataset
+      SIM_E2E_OUTPUT_DIR: ${{ github.workspace }}/.simulation-training
+      CUDA_VISIBLE_DEVICES: ${{ vars.SIM_E2E_CUDA_VISIBLE_DEVICES || '0' }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          disable-sudo: true
+          disable-telemetry: true
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443 github.com:443 raw.githubusercontent.com:443
+            huggingface.co:443 cas-server.xethub.hf.co:443 transfer.xethub.hf.co:443
+            us.aws.cdn.hf.co:443 download.pytorch.org:443 download-r2.pytorch.org:443
+            files.pythonhosted.org:443 pypi.org:443 releases.astral.sh:443
+            release-assets.githubusercontent.com:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/simulation-environment
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.resume_run_id != ''
+        with:
+          name: simulation-training-${{ inputs.policy }}
+          run-id: ${{ inputs.resume_run_id }}
+          github-token: ${{ github.token }}
+          path: .simulation-resume
+      - name: Resume only a matching recorded training job
+        if: inputs.resume_run_id != ''
+        working-directory: library
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path('../.simulation-resume')
+          provenance = json.loads((root / 'provenance.json').read_text())
+          if provenance['policy'] != os.environ['SIM_E2E_POLICY'] or provenance['source_sha'] != os.environ['GITHUB_SHA']:
+              raise ValueError('Resume checkpoint must use the same policy and source revision')
+          checkpoint = (root / 'checkpoints/last.ckpt').resolve()
+          if not checkpoint.is_file():
+              raise FileNotFoundError('Resume artifact has no last.ckpt')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'SIM_E2E_RESUME_CHECKPOINT={checkpoint}\n')
+          PY
+      - name: Record provenance before training
+        run: |
+          mkdir -p "$SIM_E2E_OUTPUT_DIR"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          Path(os.environ['SIM_E2E_OUTPUT_DIR'], 'provenance.json').write_text(json.dumps({
+              'policy': os.environ['SIM_E2E_POLICY'], 'source_sha': os.environ['GITHUB_SHA'],
+              'dataset_revision': '6a949360761fee17089fbaaf8bc53f59715cb575', 'epochs': 3,
+          }))
+          PY
+      - name: Train with periodic resumable checkpoints
+        timeout-minutes: 7100
+        working-directory: library
+        run: |
+          uv run --no-sync pytest tests/integration/test_simulation_training_e2e.py \
+            -k test_train_export_and_run_in_simulation -v --junitxml="$SIM_E2E_OUTPUT_DIR/junit.xml"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: simulation-training-${{ inputs.policy }}
+          path: .simulation-training/
+          compression-level: 0
+          retention-days: 7
