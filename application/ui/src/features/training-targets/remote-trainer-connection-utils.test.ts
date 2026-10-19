@@ -24,6 +24,7 @@ const awsTrainer: SchemaRemoteTrainer = {
     connection: {
         connection_mode: 'aws_batch',
         schema_version: 1,
+        profile_name: 'studio',
         region: 'eu-west-1',
         studio_role_arn: 'arn:aws:iam::1:role/studio',
         bucket: 'jobs',

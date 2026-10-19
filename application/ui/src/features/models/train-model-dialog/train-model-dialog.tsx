@@ -8,6 +8,7 @@ import { SchemaDeviceInfo, SchemaTrainJob as SchemaJob, SchemaModel } from '../.
 import { useProject } from '../../projects/use-project';
 import { InlineAlert } from '../../robots/setup-wizard/shared/inline-alert';
 import { getDisplayHealth, healthLabel, healthVariant } from '../../training-targets/remote-trainer-health-utils';
+import { notifyAwsAuthentication, showAwsError } from '../../training-targets/training-target-form/aws-error-alert';
 import { useRemoteTrainersHealth } from '../../training-targets/training-targets-table/use-remote-trainers-health';
 import { useRemoteTrainerHealth } from '../../training-targets/use-remote-trainer-health';
 import { supportsLora } from '../shared/peft';
@@ -343,6 +344,10 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
                 // Final guard: the remote trainer may have gone offline since the last
                 // poll, so re-check availability right before submitting the job.
                 const latestHealth = await checkRemoteTrainerHealth();
+                if (latestHealth?.authentication_issue) {
+                    notifyAwsAuthentication(latestHealth.authentication_issue);
+                    return;
+                }
                 if (
                     latestHealth === null ||
                     latestHealth.status === 'unreachable' ||
@@ -416,6 +421,10 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
             const response = await trainMutation.mutateAsync({ body: payload });
             close(response as SchemaTrainJob | undefined);
         } catch (error) {
+            if (error && typeof error === 'object' && 'profile_name' in error) {
+                showAwsError(error);
+                return;
+            }
             setSubmitError(getApiErrorMessage(error) ?? 'The job could not be submitted. Try again.');
         } finally {
             setIsSubmitting(false);

@@ -1,7 +1,10 @@
+import { useEffect, useRef } from 'react';
+
 import { useQueries } from '@tanstack/react-query';
 
 import { $api } from '../../../api/client';
 import { SchemaRemoteTrainerHealth } from '../../../api/openapi-spec';
+import { clearAwsAuthentication, notifyAwsAuthentication } from '../training-target-form/aws-error-alert';
 
 const REMOTE_UNAVAILABLE_POLL_MS = 15000;
 const REMOTE_STARTING_POLL_MS = 5000;
@@ -18,6 +21,7 @@ type RemoteTrainerHealthEntry = {
  * `useRemoteTrainerHealth` (identical query key), and retries unreachable trainers until they recover.
  */
 export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string, RemoteTrainerHealthEntry> => {
+    const affected = useRef(new Map<string, string>());
     const queries = useQueries({
         queries: remoteTrainerIds.map((remoteTrainerId) =>
             $api.queryOptions(
@@ -29,12 +33,27 @@ export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string,
                     refetchInterval: (healthQuery) => {
                         const status = healthQuery.state.data?.status;
                         if (status === 'starting') return REMOTE_STARTING_POLL_MS;
-                        return status === 'unreachable' ? REMOTE_UNAVAILABLE_POLL_MS : false;
+                        return status === 'unreachable' || healthQuery.state.data?.authentication_issue
+                            ? REMOTE_UNAVAILABLE_POLL_MS
+                            : false;
                     },
                 }
             )
         ),
     });
+    useEffect(() => {
+        queries.forEach((query, index) => {
+            const id = remoteTrainerIds[index];
+            const issue = query.data?.authentication_issue;
+            if (issue) {
+                affected.current.set(id, issue.profile_name);
+                notifyAwsAuthentication(issue);
+            } else if (query.data?.status === 'healthy' && affected.current.has(id)) {
+                clearAwsAuthentication(affected.current.get(id)!);
+                affected.current.delete(id);
+            }
+        });
+    }, [queries, remoteTrainerIds]);
 
     return new Map(
         remoteTrainerIds.map((remoteTrainerId, index) => {

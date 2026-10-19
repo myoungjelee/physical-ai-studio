@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from sse_starlette import EventSourceResponse
 
@@ -10,9 +10,11 @@ from api.dependencies import get_event_processor_ws, get_job_service, get_model_
 from core.scheduler import Scheduler
 from exceptions import InvalidJobStateError, ResourceNotFoundError, ResourceType
 from schemas import Job
+from schemas.aws_auth import AwsAuthenticationIssue
 from schemas.base_job import JobStatus
 from schemas.job import RemoteTrainJobPayload, TrainJob, TrainJobPayload
 from services import JobService, ModelMetricsService
+from services.aws_auth_service import AwsAuthenticationRequiredError
 from services.event_processor import EventProcessor, EventType
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
@@ -44,13 +46,16 @@ async def delete_job(
     await job_service.delete_job(job_id)
 
 
-@router.post(":train")
+@router.post(":train", response_model=Job, responses={400: {"model": AwsAuthenticationIssue}})
 async def submit_train_job(
     job_service: Annotated[JobService, Depends(get_job_service)],
     payload: Annotated[TrainJobPayload, Body()],
-) -> Job:
+) -> Job | JSONResponse:
     """Endpoint to submit a training job"""
-    return await job_service.submit_train_job(payload=payload)
+    try:
+        return await job_service.submit_train_job(payload=payload)
+    except AwsAuthenticationRequiredError as error:
+        return JSONResponse(status_code=400, content=error.issue.model_dump())
 
 
 @router.post("/{job_id}:interrupt")
@@ -68,6 +73,16 @@ async def interrupt_job(
         return
     if job.status in {JobStatus.COMPLETED, JobStatus.FAILED}:
         raise InvalidJobStateError("Cannot stop a finished job")
+    if (
+        isinstance(job, TrainJob)
+        and isinstance(job.payload, RemoteTrainJobPayload)
+        and job.payload.remote_trainer_url
+        and job.payload.remote_trainer_url.startswith("aws-batch://")
+    ):
+        await job_service.update_remote_job_state(job_id, cancel_requested=True)
+        if job.payload.remote_job_id is not None or job.status == JobStatus.RUNNING:
+            scheduler.job_interrupt_flags[str(job_id)] = True
+            return
     if job.status == JobStatus.RUNNING and isinstance(job, TrainJob):
         # Keep the job RUNNING until the worker has stopped and flushed progress.
         # Otherwise Delete can remove it while the worker still owns it.

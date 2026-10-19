@@ -83,14 +83,39 @@ Studio automatically assigns an available local loopback port for each SSH train
 
 ## AWS Batch provider
 
-The **AWS Provider** training target submits one-off training jobs to AWS Batch. Studio supports one AWS provider with the fixed name **AWS Provider**. Studio uses the AWS SDK credential chain on its backend host to assume the configured Studio role.
+The **AWS Provider** training target submits one-off training jobs to AWS Batch. Studio supports one AWS provider with the fixed name **AWS Provider**. Studio uses the selected named AWS profile on its backend host to assume the configured Studio role.
 
 1. Open **Settings**, then **Training Targets**, and select **AWS Provider**.
-2. Deploy the linked AWS Batch CloudFormation stack in **US East (N. Virginia)** (`us-east-1`), or provision equivalent resources with Terraform or another tool.
-3. Enter the stack's `ConfigurationUri` output in **S3 configuration file URI**.
-4. Select **Add training target**.
+2. In **Deploy and configure AWS stack**, deploy the linked CloudFormation stack in **US East (N. Virginia)** (`us-east-1`), or use an existing deployment. Wait for stack creation to complete and copy `ConfigurationUri` from its **Outputs** tab.
+3. Paste that output into **S3 configuration file URI**, then select **Next**. Use the configuration file URI, not just the bucket URL.
+4. In **Connect to AWS remote training stack**, select an **AWS profile** that is configured and authenticated on the Studio backend host. The information button explains credential setup.
+5. Select **Connect**. Studio reads and validates the configuration using the selected profile, then saves the target. If it fails, an error toast explains recovery and the form preserves your inputs. **Back** returns to the URI without discarding your profile selection.
+
+Editing a target uses the same two steps, prefilled with the saved URI and profile, without the deployment instructions. Select **Save changes** on the second step to validate and save it.
 
 The AWS Batch template publishes `studio-config.json` in its jobs bucket. Studio reads and validates this document with the backend's existing AWS credentials before saving the training target. That identity needs `s3:GetObject` permission on the configuration object and permission to assume the role specified in the document. The role must trust that identity. Cross-account access also requires the bucket policy to allow the identity to read the configuration object.
+
+### Authenticate the Studio backend
+
+The **AWS profile** dropdown lists profiles configured on the backend host. Select a profile explicitly; there is no ambient credential-chain option. A profile named `default` can be selected like any other profile. SSO, assume-role profiles, and configured credential helpers are supported. Studio saves the profile name with the target and pins it in submitted jobs for restart recovery; it does not copy credentials into the database or job payload. The training region comes from the configuration document. Open the dropdown again to refresh profiles after external setup.
+
+On a fresh machine, install the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) if your authentication method uses it, then create the profile on the **backend host**. For organization-managed IAM Identity Center access, your administrator supplies the SSO start URL and SSO region:
+
+```bash
+aws configure sso --profile studio
+aws sso login --profile studio
+aws sts get-caller-identity --profile studio
+```
+
+For IAM access keys, use `aws configure --profile studio` instead. Other credential helpers should be configured according to your organization's instructions. Select `studio` in Studio's profile dropdown; subsequent starts do not require `AWS_PROFILE` or region exports. Renew authentication using the profile's usual method when its session expires.
+
+Submitting the form verifies that the selected profile can read the S3 configuration; it does not verify permissions for every training resource. In Docker deployments, make `~/.aws` configuration, credentials, and session caches accessible to the backend container user, and persist them across container recreation. Studio reads profiles through the AWS SDK and does not require the AWS CLI to be installed in the container.
+
+If a saved target's session expires, **Health & capability** shows **Credentials expired**. Renew the profile using its configured authentication method on the backend host (for example, `aws sso login --profile studio`), then select **Check status** in Studio.
+
+Studio also reports authentication issues when launching training and while tracking jobs, logs, metrics, or model downloads. The error toast names the affected profile and offers **Copy command** for SSO renewal. Copying dismisses the toast. Job actions and target health provide **Authentication instructions** to show it again.
+
+An already-submitted AWS job is not marked failed just because Studio's credentials expire. Studio retains its job ID and last progress, shows **Awaiting AWS authentication**, and retries automatically after renewal. AWS training may continue while Studio cannot observe it. Model downloads and live metrics resume after credentials are renewed. If stopping requires authentication, **Stop pending — authentication required** means AWS termination has not yet been confirmed; the cancellation request survives a Studio restart. Network and permission failures are reported separately from authentication issues.
 
 ### Configuration document
 

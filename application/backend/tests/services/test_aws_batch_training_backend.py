@@ -9,7 +9,7 @@ from zipfile import ZipFile
 
 import pytest
 import yaml
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, SSOTokenLoadError
 from pydantic import SecretStr
 
 from schemas.job import RemoteTrainJobPayload, TrainJobPayloadAdapter
@@ -88,6 +88,7 @@ async def test_batch_catalog_and_preparation_do_not_use_http(connection, monkeyp
     service.get_remote_trainer = AsyncMock(return_value=trainer)
     http = MagicMock(side_effect=AssertionError("Batch has no HTTP endpoint"))
     monkeypatch.setattr("services.remote_trainer_service.httpx.AsyncClient", http)
+    monkeypatch.setattr("services.training_targets.remote._make_session", MagicMock())
     catalog = await service.get_policy_catalog(trainer.id)
     assert {p.id for p in catalog.available} == {"act", "pi05", "smolvla", "molmoact2"}
     payload = RemoteTrainJobPayload(
@@ -111,8 +112,10 @@ async def test_batch_catalog_and_preparation_do_not_use_http(connection, monkeyp
 
 
 @pytest.mark.parametrize("configuration_uri", [None, "s3://config-bucket/trainer.json"])
-def test_batch_trainer_url_preserves_resolved_resources(connection, configuration_uri) -> None:
+@pytest.mark.parametrize("profile_name", ["default", "studio"])
+def test_batch_trainer_url_preserves_resolved_resources(connection, configuration_uri, profile_name) -> None:
     connection.configuration_uri = configuration_uri
+    connection.profile_name = profile_name
     connection.targets["g4dn.2xlarge"].job_definition = "arn:aws:batch:us-east-1:123:job-definition/small:1"
     assert aws_batch_connection_from_url(aws_batch_trainer_url(connection)) == connection
 
@@ -206,6 +209,93 @@ async def test_scheduler_failure_without_status_is_reported(context, aws) -> Non
     s3.get_object.side_effect = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
     with pytest.raises(RuntimeError, match="Image pull failed"):
         await (await get_training_backend(context.payload)).train(context)
+
+
+@pytest.mark.parametrize("phase", ["poll", "download", "logs"])
+async def test_expired_credentials_wait_and_recover_without_resubmitting(context, aws, monkeypatch, phase) -> None:
+    context.remote_job_id = uuid4()
+    original_id = context.remote_job_id
+    context.on_authentication_issue = AsyncMock()
+    backend = AwsBatchTrainingBackend(aws_batch_connection_from_url(context.payload.remote_trainer_url))
+    expired = SSOTokenLoadError(error_msg="expired")
+    monkeypatch.setattr(f"{MODULE}.asyncio.sleep", AsyncMock())
+    poll = MagicMock(return_value=({"status": "SUCCEEDED"}, None))
+    download, logs = MagicMock(), MagicMock()
+    if phase == "poll":
+        poll.side_effect = [expired, ({"status": "SUCCEEDED"}, None)]
+    elif phase == "download":
+        download.side_effect = [expired, None]
+    else:
+        logs.side_effect = [expired, None]
+    monkeypatch.setattr(backend, "_poll", poll)
+    monkeypatch.setattr(backend, "_download", download)
+    monkeypatch.setattr(backend, "_relay_logs", logs)
+    monkeypatch.setattr(backend, "_extract", MagicMock())
+    await backend.train(context)
+    assert context.remote_job_id == original_id
+    aws[0].submit_job.assert_not_called()
+    issues = context.on_authentication_issue.call_args_list
+    assert issues[0].args[0].command == "aws sso login --profile=default"
+    assert issues[-1].args == (None,)
+    assert any(
+        "Awaiting AWS authentication" in call.kwargs.get("message", "") for call in context.progress.call_args_list
+    )
+
+
+async def test_cancel_waits_for_authentication_before_confirming_stop(context, aws, monkeypatch) -> None:
+    context.remote_job_id = uuid4()
+    context.should_cancel_job = lambda: True
+    context.on_authentication_issue = AsyncMock()
+    aws[0].terminate_job.side_effect = [SSOTokenLoadError(error_msg="expired"), None]
+    monkeypatch.setattr(f"{MODULE}.asyncio.sleep", AsyncMock())
+    with pytest.raises(TrainingCanceledError):
+        await AwsBatchTrainingBackend(aws_batch_connection_from_url(context.payload.remote_trainer_url)).train(context)
+    assert aws[0].terminate_job.call_count == 2
+    assert any("not confirmed stopped" in call.kwargs.get("message", "") for call in context.progress.call_args_list)
+
+
+async def test_authentication_wait_survives_shutdown(context, aws, monkeypatch) -> None:
+    context.remote_job_id = uuid4()
+    context.on_authentication_issue = AsyncMock()
+    backend = AwsBatchTrainingBackend(aws_batch_connection_from_url(context.payload.remote_trainer_url))
+
+    def expired():
+        context.should_suspend = lambda: True
+        raise SSOTokenLoadError(error_msg="expired")
+
+    monkeypatch.setattr(backend, "_poll", lambda *args: expired())
+    with pytest.raises(TrainingSuspendedError):
+        await backend.train(context)
+    aws[0].terminate_job.assert_not_called()
+
+
+async def test_ambiguous_submission_failure_is_not_retried(context, aws, monkeypatch, tmp_path) -> None:
+    from botocore.exceptions import EndpointConnectionError
+
+    archive = tmp_path / "dataset.zip"
+    archive.write_bytes(b"dataset")
+    monkeypatch.setattr(f"{MODULE}.DatasetDownloadService.create_dataset_archive", lambda *args: archive)
+    backend = AwsBatchTrainingBackend(aws_batch_connection_from_url(context.payload.remote_trainer_url))
+    monkeypatch.setattr(backend, "_upload_inputs", MagicMock())
+    submit = MagicMock(side_effect=EndpointConnectionError(endpoint_url="https://batch.amazonaws.com"))
+    monkeypatch.setattr(backend, "_submit", submit)
+    with pytest.raises(EndpointConnectionError):
+        await backend.train(context)
+    submit.assert_called_once()
+
+
+async def test_submission_rejects_expired_profile_before_creating_job(connection, context, monkeypatch) -> None:
+    from services.aws_auth_service import AwsAuthenticationRequiredError
+
+    trainer = RemoteTrainer(id=uuid4(), name="AWS Provider", connection=connection)
+    service = RemoteTrainerService(MagicMock())
+    service.get_remote_trainer = AsyncMock(return_value=trainer)
+    monkeypatch.setattr(
+        "services.training_targets.remote._make_session", MagicMock(side_effect=SSOTokenLoadError(error_msg="expired"))
+    )
+    with pytest.raises(AwsAuthenticationRequiredError) as captured:
+        await RemoteTrainingTargetHandler(service).prepare(context.payload)
+    assert captured.value.issue.command == "aws sso login --profile=default"
 
 
 def test_policy_routes_match_existing_cloudformation_mapping() -> None:

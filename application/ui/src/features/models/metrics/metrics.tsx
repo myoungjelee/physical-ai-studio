@@ -1,12 +1,17 @@
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState } from 'react';
 
-import { Grid, Heading, IllustratedMessage, Loading } from '@geti-ui/ui';
+import { Grid, Heading, IllustratedMessage, Loading, StatusLight } from '@geti-ui/ui';
 import { experimental_streamedQuery as streamedQuery, useQuery } from '@tanstack/react-query';
 
 import { batchAsyncIterable } from '../../../api/batch-async-iterable';
 import { fetchClient } from '../../../api/client';
 import { fetchSSE } from '../../../api/fetch-sse';
+import { SchemaAwsAuthenticationIssue } from '../../../api/openapi-spec';
 import { getQueryKey } from '../../../query-client/query-client.interface';
+import {
+    clearAwsAuthentication,
+    notifyAwsAuthentication,
+} from '../../training-targets/training-target-form/aws-error-alert';
 import { ReactComponent as EmptyIllustration } from './../../../assets/illustration.svg';
 import { foldMetricsBatch, sortMetricsByStep } from './merge-metrics-by-step';
 import { MetricGraph } from './metric-graph';
@@ -79,7 +84,8 @@ export const MetricsView = ({ series, isLoading }: MetricsViewProps) => {
 const METRICS_BATCH_INTERVAL_MS = 200;
 
 const useJobMetrics = (jobId: string) => {
-    return useQuery({
+    const [authenticationIssue, setAuthenticationIssue] = useState<SchemaAwsAuthenticationIssue | null>(null);
+    const query = useQuery({
         queryKey: getQueryKey(['get', '/api/jobs/{job_id}/model_metrics', { params: { path: { job_id: jobId } } }]),
         queryFn: streamedQuery({
             streamFn: (context) => {
@@ -87,8 +93,22 @@ const useJobMetrics = (jobId: string) => {
                     params: { path: { job_id: jobId } },
                 });
 
+                let affectedProfile: string | undefined;
                 return batchAsyncIterable(
-                    fetchSSE<MetricsEntry>(url, { signal: context.signal }),
+                    fetchSSE<MetricsEntry>(url, {
+                        signal: context.signal,
+                        onAwsAuthentication: (data) => {
+                            const issue: SchemaAwsAuthenticationIssue | null = JSON.parse(data);
+                            setAuthenticationIssue(issue);
+                            if (issue) {
+                                affectedProfile = issue.profile_name;
+                                notifyAwsAuthentication(issue);
+                            } else if (affectedProfile) {
+                                clearAwsAuthentication(affectedProfile);
+                                affectedProfile = undefined;
+                            }
+                        },
+                    }),
                     METRICS_BATCH_INTERVAL_MS
                 );
             },
@@ -98,6 +118,7 @@ const useJobMetrics = (jobId: string) => {
         select: sortMetricsByStep,
         staleTime: Infinity,
     });
+    return { ...query, authenticationIssue };
 };
 
 const lossFormatter = new Intl.NumberFormat('en-US', {
@@ -156,7 +177,17 @@ export const JobMetricsContent = ({ jobId }: { jobId: string }) => {
         },
     ];
 
-    return <MetricsView series={metrics} isLoading={query.isLoading} />;
+    return (
+        <>
+            {query.authenticationIssue && (
+                <StatusLight variant='yellow'>
+                    Metrics updates paused — authenticate profile {query.authenticationIssue.profile_name} on the Studio
+                    backend host.
+                </StatusLight>
+            )}
+            <MetricsView series={metrics} isLoading={query.isLoading && !query.authenticationIssue} />
+        </>
+    );
 };
 
 const useModelMetrics = (modelId: string) => {

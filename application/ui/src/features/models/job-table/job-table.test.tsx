@@ -134,6 +134,27 @@ describe('TrainingRow', () => {
         expect(screen.getByText('Preparing training data')).toBeInTheDocument();
     });
 
+    it('keeps a running Batch job visible while authentication is required', () => {
+        renderTrainingRow({
+            status: 'running',
+            payload: {
+                ...localJob.payload,
+                training_target: 'remote',
+                remote_trainer_id: remoteTrainer.id,
+                remote_trainer_url: 'aws-batch://us-east-1/training-jobs',
+                authentication_issue: {
+                    profile_name: 'studio',
+                    code: 'aws_credentials_expired',
+                    title: 'Session expired',
+                    detail: 'Renew studio on the backend host.',
+                    command: 'aws sso login --profile=studio',
+                },
+            },
+        });
+        expect(screen.getByText('Awaiting AWS authentication')).toBeInTheDocument();
+        expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    });
+
     it('badges a disconnected remote job without extra text', () => {
         renderTrainingRow({
             message: 'Trainer unreachable; waiting to reconnect',

@@ -78,19 +78,18 @@ class ModelMetricsService:
         """Stream successive metric snapshots published by a Batch trainer to S3."""
         from botocore.exceptions import BotoCoreError, ClientError
 
+        from services.aws_auth_service import authentication_issue
         from services.aws_batch import _make_session, aws_batch_connection_from_url
 
         connection = aws_batch_connection_from_url(trainer_url)
-        client = None
-        session_created = 0.0
-        rows_sent = 0
+        client, session_created, rows_sent, awaiting_authentication = None, 0.0, 0, False
         try:
             while True:
-                if client is None or time.monotonic() - session_created > 600:
-                    session = await asyncio.to_thread(_make_session, connection)
-                    client = session.client("s3")
-                    session_created = time.monotonic()
                 try:
+                    if client is None or time.monotonic() - session_created > 600:
+                        session = await asyncio.to_thread(_make_session, connection)
+                        client = session.client("s3")
+                        session_created = time.monotonic()
                     response = await asyncio.to_thread(
                         client.get_object, Bucket=connection.bucket, Key=f"jobs/{job_id}/metrics.csv"
                     )
@@ -99,8 +98,17 @@ class ModelMetricsService:
                         contents = (await asyncio.to_thread(body.read)).decode("utf-8")
                     finally:
                         body.close()
-                except ClientError as error:
-                    if error.response["Error"]["Code"] not in {"NoSuchKey", "404"}:
+                except (BotoCoreError, ClientError) as error:
+                    if issue := authentication_issue(error, connection.profile_name):
+                        client = None
+                        awaiting_authentication = True
+                        yield ServerSentEvent(event="aws_authentication", data=issue.model_dump_json())
+                        await asyncio.sleep(5)
+                        continue
+                    if not isinstance(error, ClientError) or error.response["Error"]["Code"] not in {
+                        "NoSuchKey",
+                        "404",
+                    }:
                         raise
                     await asyncio.sleep(5)
                     continue
@@ -108,6 +116,9 @@ class ModelMetricsService:
                 if lines and not lines[-1].endswith("\n"):
                     lines.pop()
                 rows = list(csv.DictReader(lines))
+                if awaiting_authentication:
+                    yield ServerSentEvent(event="aws_authentication", data="null")
+                    awaiting_authentication = False
                 for row in rows[rows_sent:]:
                     data = {
                         key.replace("/", "_"): ModelMetricsService._parse_value(value) for key, value in row.items()

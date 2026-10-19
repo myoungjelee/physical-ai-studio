@@ -40,9 +40,11 @@ from services.ssh import persistent_trainer
 MODULE = "services.remote_trainer_service"
 
 
-def test_resolve_aws_configuration() -> None:
+@pytest.mark.parametrize("profile_name", ["default", "studio"])
+def test_resolve_aws_configuration(profile_name: str) -> None:
     configuration = AwsBatchProviderConfiguration(
         configuration_uri="s3://config-bucket/studio-config.json",
+        profile_name=profile_name,
     )
     resources = {
         "schema_version": 1,
@@ -57,10 +59,11 @@ def test_resolve_aws_configuration() -> None:
         client.get_object.return_value = {"Body": body}
         result = resolve_aws_batch_configuration(configuration)
 
-    make_session.assert_called_once_with()
+    make_session.assert_called_once_with(profile_name=profile_name)
     make_session.return_value.client.assert_called_once_with("s3")
     client.get_object.assert_called_once_with(Bucket="config-bucket", Key="studio-config.json")
     assert result.configuration_uri == configuration.configuration_uri
+    assert result.profile_name == profile_name
     assert result.region == resources["region"]
     assert result.studio_role_arn == resources["studio_role_arn"]
     assert result.bucket == "jobs-bucket"
@@ -72,6 +75,7 @@ def test_resolve_aws_configuration() -> None:
 def test_resolve_aws_configuration_rejects_invalid_document(payload: bytes) -> None:
     configuration = AwsBatchProviderConfiguration(
         configuration_uri="s3://config-bucket/studio-config.json",
+        profile_name="studio",
     )
     body = BytesIO(payload)
     with patch("boto3.Session") as make_session:
@@ -84,18 +88,20 @@ def test_resolve_aws_configuration_rejects_invalid_document(payload: bytes) -> N
 @pytest.mark.parametrize("uri", ["https://bucket/config.json", "s3://bucket/", "s3://bucket/config?version=1"])
 def test_aws_configuration_requires_s3_object_uri(uri: str) -> None:
     with pytest.raises(ValidationError):
-        AwsBatchProviderConfiguration(configuration_uri=uri)
+        AwsBatchProviderConfiguration(configuration_uri=uri, profile_name="studio")
 
 
 @pytest.mark.parametrize("missing_field", ["region", "studio_role_arn"])
 def test_aws_configuration_requires_connection_fields_in_document(missing_field: str) -> None:
-    resources = _aws().model_dump(exclude={"connection_mode", "configuration_uri", missing_field})
+    resources = _aws().model_dump(exclude={"connection_mode", "configuration_uri", "profile_name", missing_field})
     body = BytesIO(json.dumps(resources).encode())
     with patch("boto3.Session") as session:
         session.return_value.client.return_value.get_object.return_value = {"Body": body}
         with pytest.raises(ValidationError, match=missing_field):
             resolve_aws_batch_configuration(
-                AwsBatchProviderConfiguration(configuration_uri="s3://config-bucket/studio-config.json")
+                AwsBatchProviderConfiguration(
+                    configuration_uri="s3://config-bucket/studio-config.json", profile_name="studio"
+                )
             )
     assert body.closed
 

@@ -39,7 +39,7 @@ dependencies = [
   "physicalai-studio-plugin~=0.3.0",
   "asyncssh~=2.24",
   "sigstore>=4.0,<5",
-  "boto3>=1.40",
+  "boto3[crt]>=1.42",
 ]
 
 [project.scripts]

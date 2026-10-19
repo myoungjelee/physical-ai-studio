@@ -12,6 +12,7 @@ app.include_router(router)
 client = TestClient(app)
 
 CONFIGURATION = {
+    "profile_name": "studio",
     "configuration_uri": "s3://config-bucket/studio-config.json",
 }
 

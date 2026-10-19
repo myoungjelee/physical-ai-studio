@@ -1,4 +1,4 @@
-import { Badge, Grid, Heading, StatusLight, Text, View } from '@geti-ui/ui';
+import { Badge, Button, Grid, Heading, StatusLight, Text, View } from '@geti-ui/ui';
 
 import { SchemaRemoteTrainer, SchemaRemoteTrainerHealth } from '../../../../api/openapi-spec';
 import { connectionModeLabel, sshHostDisplay } from '../../remote-trainer-connection-utils';
@@ -14,6 +14,7 @@ import {
     storageDetail,
     trainerHealthDetail,
 } from '../../remote-trainer-health-utils';
+import { showAwsError } from '../../training-target-form/aws-error-alert';
 
 import classes from './remote-trainer-detail.module.css';
 
@@ -86,6 +87,11 @@ export const RemoteTrainerDetail = ({ remoteTrainer, health, isChecking }: Remot
         <View backgroundColor={'gray-75'} padding={'size-300'} borderColor={'gray-300'} borderWidth={'thin'}>
             <div className={`${classes.detailGrid} ${classes.twoColumns}`}>
                 <View UNSAFE_className={classes.detailSection}>
+                    {health?.authentication_issue && (
+                        <Button variant='secondary' onPress={() => showAwsError(health.authentication_issue)}>
+                            Authentication instructions
+                        </Button>
+                    )}
                     <div className={classes.sectionHeader}>
                         <Heading level={3} UNSAFE_className={classes.sectionHeading}>
                             Health &amp; capability

@@ -4,6 +4,7 @@
 interface FetchSSEOptions {
     /** Abort signal used by query cancellation. */
     signal?: AbortSignal;
+    onAwsAuthentication?: (data: string) => void;
 }
 
 /**
@@ -21,6 +22,9 @@ export function fetchSSE<T = unknown>(url: string, options: FetchSSEOptions = {}
             }
 
             const eventSource = new EventSource(url);
+            eventSource.addEventListener('aws_authentication', (event) => {
+                options.onAwsAuthentication?.((event as MessageEvent<string>).data);
+            });
             let aborted = false;
             let onAbort: (() => void) | undefined;
 

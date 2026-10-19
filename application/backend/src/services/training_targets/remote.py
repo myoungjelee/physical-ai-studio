@@ -5,10 +5,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
+from botocore.exceptions import BotoCoreError, ClientError
+
 from exceptions import InvalidResourceError, RemoteResumeUnsupportedError
 from schemas.job import RemoteTrainJobPayload, TrainingTarget, TrainJobPayload
 from schemas.remote_trainer import AwsBatchConnection
-from services.aws_batch import aws_batch_trainer_url
+from services.aws_auth_service import AwsAuthenticationRequiredError, authentication_issue
+from services.aws_batch import _make_session, aws_batch_trainer_url
 from services.remote_trainer_service import RemoteTrainerService
 
 
@@ -34,6 +39,13 @@ class RemoteTrainingTargetHandler:
             raise RemoteResumeUnsupportedError
         remote_trainer = await self.remote_trainer_service.get_remote_trainer(payload.remote_trainer_id)
         is_batch = isinstance(remote_trainer.connection, AwsBatchConnection)
+        if isinstance(remote_trainer.connection, AwsBatchConnection):
+            try:
+                await asyncio.to_thread(_make_session, remote_trainer.connection)
+            except (BotoCoreError, ClientError) as error:
+                if issue := authentication_issue(error, remote_trainer.connection.profile_name):
+                    raise AwsAuthenticationRequiredError(issue) from error
+                raise
         if remote_trainer.url is None and not is_batch:
             raise ValueError(f"Training on {remote_trainer.connection_mode.value} trainers is not available yet")
         catalog = await self.remote_trainer_service.get_policy_catalog(payload.remote_trainer_id)
@@ -47,6 +59,8 @@ class RemoteTrainingTargetHandler:
                     else str(remote_trainer.url)
                 ),
                 "remote_trainer_name": remote_trainer.name,
+                "authentication_issue": None,
+                "cancel_requested": False,
                 **({"device": None} if is_batch else {}),
             }
         )

@@ -7,6 +7,13 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from botocore.exceptions import (
+    ClientError,
+    EndpointConnectionError,
+    LoginRefreshRequired,
+    NoCredentialsError,
+    SSOTokenLoadError,
+)
 
 from schemas.remote_trainer import AwsBatchConnection, DirectConnection, RemoteTrainer, SshConnection
 from services import RemoteTrainerService
@@ -309,6 +316,37 @@ async def test_check_remote_trainer_reports_disabled_aws_queue_as_degraded() -> 
     assert result.status == "degraded"
     assert result.reason_code == "job_queue_disabled"
     assert result.devices == []
+
+
+@pytest.mark.parametrize(
+    "error,status,reason",
+    [
+        (LoginRefreshRequired(), "degraded", "aws_credentials_expired"),
+        (SSOTokenLoadError(error_msg="expired"), "degraded", "aws_credentials_expired"),
+        (NoCredentialsError(), "degraded", "aws_credentials_missing"),
+        (ClientError({"Error": {"Code": "ExpiredToken"}}, "AssumeRole"), "degraded", "aws_credentials_expired"),
+        (ClientError({"Error": {"Code": "AccessDenied"}}, "AssumeRole"), "degraded", "aws_access_denied"),
+        (EndpointConnectionError(endpoint_url="https://sts.us-east-1.amazonaws.com"), "unreachable", "aws_unavailable"),
+    ],
+)
+async def test_aws_authentication_failures_are_not_reported_as_network_failures(error, status, reason) -> None:
+    trainer = RemoteTrainer(
+        id=uuid4(),
+        name="AWS Provider",
+        connection=AwsBatchConnection(
+            region="us-east-1",
+            studio_role_arn="arn",
+            bucket="jobs-bucket",
+            targets={"gpu": {"queue": "queue", "job_definition": "definition"}},
+        ),
+    )
+    with (
+        patch.object(RemoteTrainerService, "get_remote_trainer", AsyncMock(return_value=trainer)),
+        patch("services.aws_batch._make_session", side_effect=error),
+    ):
+        result = await RemoteTrainerService(MagicMock()).check_remote_trainer(trainer.id)
+    assert result.status == status
+    assert result.reason_code == reason
 
 
 @pytest.mark.anyio

@@ -5,6 +5,7 @@ from uuid import UUID
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_serializer, field_validator, model_validator
 
+from schemas.aws_auth import AwsAuthenticationIssue
 from schemas.base_job import BaseJob, JobType
 from schemas.dataset_import_job import DatasetImportJobPayload
 from schemas.hardware import DeviceType
@@ -380,6 +381,8 @@ class RemoteTrainJobPayload(TrainJobPayloadBase):
         default=None,
         description="Resolved remote trainer name pinned when the job is submitted, for display in job logs",
     )
+    authentication_issue: AwsAuthenticationIssue | None = None
+    cancel_requested: bool | None = None
 
 
 TrainJobPayload = Annotated[

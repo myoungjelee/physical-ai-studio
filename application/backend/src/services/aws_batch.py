@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from loguru import logger
 
+from schemas.aws_auth import AwsAuthenticationIssue
 from schemas.remote_trainer import (
     AwsBatchConnection,
     AwsBatchProviderConfiguration,
@@ -41,6 +42,7 @@ def aws_batch_trainer_url(connection: AwsBatchConnection) -> str:
             "studio_role_arn": connection.studio_role_arn,
             "targets": json.dumps({key: target.model_dump() for key, target in connection.targets.items()}),
             **({"configuration_uri": connection.configuration_uri} if connection.configuration_uri else {}),
+            "profile_name": connection.profile_name,
         }
     )
     return f"aws-batch://{connection.region}/{connection.bucket}?{query}"
@@ -53,12 +55,15 @@ def aws_batch_connection_from_url(url: str) -> AwsBatchConnection:
         raise ValueError("Expected an aws-batch trainer URL")
     query = parse_qs(location.query, strict_parsing=True)
     try:
-        return AwsBatchConnection(
-            region=location.netloc,
-            bucket=location.path.removeprefix("/"),
-            studio_role_arn=query["studio_role_arn"][0],
-            targets=json.loads(query["targets"][0]),
-            configuration_uri=query.get("configuration_uri", [None])[0],
+        return AwsBatchConnection.model_validate(
+            {
+                "region": location.netloc,
+                "bucket": location.path.removeprefix("/"),
+                "studio_role_arn": query["studio_role_arn"][0],
+                "targets": json.loads(query["targets"][0]),
+                "configuration_uri": query.get("configuration_uri", [None])[0],
+                "profile_name": query.get("profile_name", ["default"])[0],
+            }
         )
     except KeyError as exc:
         raise ValueError(f"Batch trainer URL is missing {exc.args[0]}") from exc
@@ -78,10 +83,12 @@ def batch_policy_catalog(connection: AwsBatchConnection) -> PolicyCatalog:
 
 
 def _make_session(connection: AwsBatchConnection) -> Any:
-    """Assume the stack's Studio role with the ambient credential chain."""
+    """Assume the stack's Studio role using the selected named profile."""
     import boto3
+    from botocore.config import Config
 
-    sts = boto3.client("sts", region_name=connection.region)
+    source = boto3.Session(profile_name=connection.profile_name)
+    sts = source.client("sts", region_name=connection.region, config=Config(connect_timeout=5, read_timeout=10))
     creds = sts.assume_role(RoleArn=connection.studio_role_arn, RoleSessionName="physicalai-studio")["Credentials"]
     return boto3.Session(
         aws_access_key_id=creds["AccessKeyId"],
@@ -92,11 +99,11 @@ def _make_session(connection: AwsBatchConnection) -> Any:
 
 
 def resolve_aws_batch_configuration(configuration: AwsBatchProviderConfiguration) -> AwsBatchConnection:
-    """Load and validate configuration using the ambient AWS credential chain."""
+    """Load and validate configuration using the selected named profile."""
     import boto3
 
     location = urlsplit(configuration.configuration_uri)
-    session = boto3.Session()
+    session = boto3.Session(profile_name=configuration.profile_name)
     response = session.client("s3").get_object(Bucket=location.netloc, Key=location.path[1:])
     body = response["Body"]
     try:
@@ -109,7 +116,7 @@ def resolve_aws_batch_configuration(configuration: AwsBatchProviderConfiguration
     return AwsBatchConnection(**configuration.model_dump(), **resources.model_dump())
 
 
-def _probe_sync(connection: AwsBatchConnection) -> tuple[HealthStatus, str | None]:
+def _probe_sync(connection: AwsBatchConnection) -> tuple[HealthStatus, str | None, AwsAuthenticationIssue | None]:
     from botocore.exceptions import BotoCoreError, ClientError
 
     try:
@@ -117,14 +124,18 @@ def _probe_sync(connection: AwsBatchConnection) -> tuple[HealthStatus, str | Non
         batch = session.client("batch")
         queues = batch.describe_job_queues(jobQueues=[t.queue for t in connection.targets.values()])["jobQueues"]
     except (BotoCoreError, ClientError) as exc:
+        from services.aws_auth_service import authentication_issue, credential_error_reason
+
+        if reason := credential_error_reason(exc):
+            return "degraded", reason, authentication_issue(exc, connection.profile_name)
         code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
         logger.debug("AWS Batch probe failed: {}", exc)
-        return "unreachable", code or "aws_unavailable"
+        return "unreachable", code or "aws_unavailable", None
     if len(queues) != len(connection.targets):
-        return "degraded", "job_queue_missing"
+        return "degraded", "job_queue_missing", None
     if any(q.get("state") != "ENABLED" or q.get("status") != "VALID" for q in queues):
-        return "degraded", "job_queue_disabled"
-    return "healthy", None
+        return "degraded", "job_queue_disabled", None
+    return "healthy", None, None
 
 
 async def probe_aws_batch(
@@ -133,9 +144,12 @@ async def probe_aws_batch(
     """Check credentials and job queues without representing queues as physical GPUs."""
     started = perf_counter()
     try:
-        status, reason_code = await asyncio.wait_for(asyncio.to_thread(_probe_sync, connection), _PROBE_TIMEOUT_S)
+        status, reason_code, issue = await asyncio.wait_for(
+            asyncio.to_thread(_probe_sync, connection), _PROBE_TIMEOUT_S
+        )
     except TimeoutError:
         status, reason_code = "unreachable", "timeout"
+        issue = None
     return RemoteTrainerHealth(
         remote_trainer_id=remote_trainer_id,
         status=status,
@@ -144,4 +158,5 @@ async def probe_aws_batch(
         devices=[],
         storage=None,
         reason_code=reason_code,
+        authentication_issue=issue,
     )

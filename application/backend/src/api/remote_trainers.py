@@ -2,8 +2,10 @@ import asyncio
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, status
+from fastapi.responses import JSONResponse
 
+from api.aws_auth import router as aws_auth_router
 from api.dependencies import get_remote_trainer_service
 from schemas.remote_trainer import (
     AwsBatchConnection,
@@ -16,39 +18,52 @@ from schemas.remote_trainer import (
     RemoteTrainerHealth,
     RemoteTrainerUpdate,
 )
+from services.aws_auth_service import aws_auth_error
 from services.aws_batch import resolve_aws_batch_configuration
 from services.remote_trainer_service import RemoteTrainerService
 
 router = APIRouter(prefix="/api/remote-trainers", tags=["Remote trainers"])
+router.include_router(aws_auth_router)
 
 
 @router.get("/providers")
 async def list_cloud_provider_schemas() -> list[CloudProviderSchema]:
     """Return the backend-owned configuration fields for supported providers."""
-    properties = AwsBatchProviderConfiguration.model_json_schema()["properties"]
+    schema = AwsBatchProviderConfiguration.model_json_schema()
+    properties = schema["properties"]
     return [
         CloudProviderSchema(
-            fields=[CloudProviderField.model_validate({"name": name, **field}) for name, field in properties.items()]
+            fields=[
+                CloudProviderField.model_validate({"name": name, **field})
+                for name, field in properties.items()
+                if name == "configuration_uri"
+            ]
         )
     ]
 
 
-@router.post("/providers/aws/configuration", responses={400: {"model": CloudProviderError}})
-async def resolve_cloud_provider_configuration(configuration: AwsBatchProviderConfiguration) -> AwsBatchConnection:
+@router.post(
+    "/providers/aws/configuration", response_model=AwsBatchConnection, responses={400: {"model": CloudProviderError}}
+)
+async def resolve_cloud_provider_configuration(
+    configuration: AwsBatchProviderConfiguration,
+) -> AwsBatchConnection | JSONResponse:
     """Resolve provisioned resources before saving an AWS provider training target."""
     from botocore.exceptions import BotoCoreError, ClientError
 
     try:
         return await asyncio.wait_for(asyncio.to_thread(resolve_aws_batch_configuration, configuration), timeout=30)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400, detail="The S3 configuration document is invalid or exceeds 64 KiB."
-        ) from error
-    except (BotoCoreError, ClientError, TimeoutError) as error:
-        raise HTTPException(
+    except ValueError:
+        return JSONResponse(
             status_code=400,
-            detail="Cannot read the S3 configuration. Check backend AWS credentials, object read permissions, and URI.",
-        ) from error
+            content=CloudProviderError(
+                code="aws_configuration_invalid",
+                title="Invalid AWS configuration",
+                detail="The S3 configuration document is invalid or exceeds 64 KiB.",
+            ).model_dump(),
+        )
+    except (BotoCoreError, ClientError, TimeoutError) as error:
+        return JSONResponse(status_code=400, content=aws_auth_error(error, configuration.profile_name).model_dump())
 
 
 @router.get("")

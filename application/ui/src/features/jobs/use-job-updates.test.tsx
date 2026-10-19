@@ -1,13 +1,15 @@
 // Copyright (C) 2025-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
+import { toast } from '@geti-ui/ui';
 import { rs } from '@rstest/core';
-import { act } from '@testing-library/react';
+import { act, waitFor } from '@testing-library/react';
 
 import { createQueryClient } from '../../query-client/query-client';
 import { getMockedDatasetImportJob } from '../../test-utils/mocks/mock-dataset-import-job';
 import { getMockedTrainJob } from '../../test-utils/mocks/mock-train-job';
 import { renderHook } from '../../test-utils/render';
+import { clearAwsAuthentication } from '../training-targets/training-target-form/aws-error-alert';
 import { JOBS_QUERY_KEY, SchemaJob } from './use-job-cache';
 import { useJobUpdates } from './use-job-updates';
 
@@ -40,6 +42,35 @@ const modelsQueryKey = (project_id: string) =>
     ['get', '/api/projects/{project_id}/models', { params: { path: { project_id } } }] as const;
 
 describe('useJobUpdates', () => {
+    it('notifies on global pages and clears authentication warnings after recovery', async () => {
+        const close = rs.fn();
+        const negative = rs.spyOn(toast, 'negative').mockReturnValue(close);
+        const queryClient = createQueryClient();
+        const job = getMockedTrainJob({ status: 'running' });
+        const issue = {
+            profile_name: 'global-studio',
+            code: 'aws_credentials_expired',
+            title: 'Expired',
+            detail: 'Renew global-studio',
+            command: 'aws sso login --profile=global-studio',
+        };
+        const waiting = {
+            ...job,
+            payload: {
+                ...job.payload,
+                training_target: 'remote' as const,
+                remote_trainer_id: 'trainer',
+                authentication_issue: issue,
+            },
+        };
+        queryClient.setQueryData(JOBS_QUERY_KEY, [waiting]);
+        renderHook(() => useJobUpdates(), { queryClient });
+        await waitFor(() => expect(negative).toHaveBeenCalledWith(issue.detail, expect.any(Object)));
+        deliver({ ...waiting, payload: { ...waiting.payload, authentication_issue: null } });
+        await waitFor(() => expect(close).toHaveBeenCalled());
+        clearAwsAuthentication(issue.profile_name);
+        negative.mockRestore();
+    });
     beforeEach(() => {
         notify.mockClear();
         capturedOnMessage = undefined;

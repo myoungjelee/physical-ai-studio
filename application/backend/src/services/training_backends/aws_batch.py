@@ -6,14 +6,16 @@ import asyncio
 import tempfile
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
 from botocore.exceptions import BotoCoreError, ClientError
 from loguru import logger
 from physicalai.data.archive_safety import SafeZipArchive
 
+from schemas.aws_auth import AwsAuthenticationIssue
 from schemas.remote_trainer import AwsBatchConnection
+from services.aws_auth_service import authentication_issue
 from services.aws_batch import POLICY_INSTANCE_TYPES, _make_session
 from services.dataset_download_service import DatasetDownloadService
 from services.staged_archive import cleanup_staged_archive
@@ -23,7 +25,11 @@ from settings import get_settings
 from trainer.batch.status import BatchJobStatus
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from services.training_backends.base import TrainingContext
+
+T = TypeVar("T")
 
 
 class _TransferStopped(Exception):
@@ -40,6 +46,42 @@ class AwsBatchTrainingBackend:
         self._log_token: str | None = None
         self._log_warning_shown = False
         self._task_warning_shown = False
+        self._authentication_issue: AwsAuthenticationIssue | None = None
+        self._progress = 0
+
+    async def _with_authentication(
+        self, context: TrainingContext, operation: Callable[[], T], *, phase: str, stopping: bool = False
+    ) -> T:
+        while True:
+            if not stopping:
+                await self._check_stop(context, str(context.remote_job_id) if context.remote_job_id else None)
+            try:
+                result = await asyncio.to_thread(operation)
+            except Exception as error:
+                issue = authentication_issue(error, self._connection.profile_name)
+                if issue is None:
+                    raise
+                self._session = None
+                if issue != self._authentication_issue:
+                    self._authentication_issue = issue
+                    if context.on_authentication_issue:
+                        await context.on_authentication_issue(issue)
+                message = (
+                    "Stop pending — AWS authentication required; remote job not confirmed stopped"
+                    if stopping
+                    else f"Awaiting AWS authentication — {phase}"
+                )
+                context.progress(max(self._progress, context.job.progress or 0), message=message)
+                if context.should_suspend():
+                    raise TrainingSuspendedError("Awaiting AWS authentication; reconnect after restart") from error
+                await asyncio.sleep(5)
+                continue
+            if self._authentication_issue is not None or getattr(context.payload, "authentication_issue", None):
+                self._authentication_issue = None
+                if context.on_authentication_issue:
+                    await context.on_authentication_issue(None)
+                context.progress(max(self._progress, context.job.progress or 0), message="AWS connection restored")
+            return result
 
     def _client(self, service: str) -> Any:
         if self._session is None or time.monotonic() - self._session_created > 600:
@@ -63,7 +105,9 @@ class AwsBatchTrainingBackend:
                 await self._check_stop(context, None)
                 context.progress(5, message="Uploading dataset snapshot to S3")
                 try:
-                    await asyncio.to_thread(self._upload_inputs, context, prefix, archive)
+                    await self._with_authentication(
+                        context, lambda: self._upload_inputs(context, prefix, archive), phase="uploading dataset"
+                    )
                 except _TransferStopped:
                     await self._check_stop(context, None)
                     raise
@@ -71,7 +115,10 @@ class AwsBatchTrainingBackend:
                 cleanup_staged_archive(archive)
             await self._check_stop(context, None)
             context.progress(10, message="Submitting AWS Batch job")
-            job_id = await asyncio.to_thread(self._submit, context, prefix)
+            job_id = await self._with_authentication(
+                context, lambda: self._submit(context, prefix), phase="submitting training job"
+            )
+            context.remote_job_id = UUID(job_id)
             if context.on_remote_job_id is not None:
                 try:
                     await context.on_remote_job_id(UUID(job_id))
@@ -84,7 +131,10 @@ class AwsBatchTrainingBackend:
         with tempfile.TemporaryDirectory(prefix="batch-model-") as directory:
             archive = Path(directory) / "artifact.zip"
             try:
-                await asyncio.to_thread(self._download, context, prefix, archive)
+                self._progress = 95
+                await self._with_authentication(
+                    context, lambda: self._download(context, prefix, archive), phase="downloading trained model"
+                )
             except _TransferStopped:
                 await self._check_stop(context, job_id)
                 raise
@@ -162,7 +212,12 @@ class AwsBatchTrainingBackend:
         while True:
             await self._check_stop(context, job_id)
             try:
-                job, status = await asyncio.to_thread(self._poll, job_id, prefix)
+                self._progress = progress
+                job, status = await self._with_authentication(
+                    context,
+                    lambda: self._poll(job_id, prefix),
+                    phase="job status unavailable; remote job may still run",
+                )
             except (BotoCoreError, ClientError):
                 if time.monotonic() - last_contact > 300:
                     raise
@@ -170,10 +225,16 @@ class AwsBatchTrainingBackend:
                 await asyncio.sleep(5)
                 continue
             last_contact = time.monotonic()
-            await asyncio.to_thread(self._relay_logs, job)
+            await self._with_authentication(context, lambda: self._relay_logs(job), phase="reading training logs")
             if status is not None:
                 progress = max(progress, min(95, 10 + round(status.progress * 0.85)))
-            task = await asyncio.to_thread(self._starting_task, job) if job["status"] == "STARTING" else {}
+            task = (
+                await self._with_authentication(
+                    context, lambda: self._starting_task(job), phase="reading startup diagnostics"
+                )
+                if job["status"] == "STARTING"
+                else {}
+            )
             message, details = self._execution_progress(job, status, task)
             details["job_id"] = job_id
             extra_info = dict(status.extra_info or {}) if status else {}
@@ -206,6 +267,8 @@ class AwsBatchTrainingBackend:
         try:
             response = self._client("ecs").describe_tasks(cluster=resource.rsplit("/", 1)[0], tasks=[task_arn])
         except (BotoCoreError, ClientError) as error:
+            if authentication_issue(error, self._connection.profile_name):
+                raise
             if not self._task_warning_shown:
                 logger.warning("Cannot read AWS Batch startup diagnostics: {}", error)
                 self._task_warning_shown = True
@@ -269,6 +332,8 @@ class AwsBatchTrainingBackend:
                 **({"nextToken": self._log_token} if self._log_token else {}),
             )
         except (BotoCoreError, ClientError) as error:
+            if authentication_issue(error, self._connection.profile_name):
+                raise
             if isinstance(error, ClientError) and error.response["Error"]["Code"] == "ResourceNotFoundException":
                 return
             if not self._log_warning_shown:
@@ -280,12 +345,14 @@ class AwsBatchTrainingBackend:
         self._log_token = response.get("nextForwardToken")
 
     async def _check_stop(self, context: TrainingContext, job_id: str | None) -> None:
-        if not context.should_stop():
+        if not context.should_stop() and not context.should_cancel_job():
             return
         if not context.should_cancel_job() and context.should_suspend():
             raise TrainingSuspendedError("Studio shutting down; leaving AWS Batch job running for reattach")
         if job_id is not None:
-            await asyncio.to_thread(self._terminate, job_id)
+            await self._with_authentication(
+                context, lambda: self._terminate(job_id), phase="stopping training", stopping=True
+            )
             logger.info("Terminated AWS Batch job {}", job_id)
         raise TrainingCanceledError("Training canceled")
 

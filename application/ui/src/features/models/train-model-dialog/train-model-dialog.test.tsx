@@ -1035,6 +1035,7 @@ describe('TrainModelDialog', () => {
             connection: {
                 connection_mode: 'aws_batch',
                 schema_version: 1,
+                profile_name: 'studio',
                 region: 'us-east-1',
                 studio_role_arn: 'arn:aws:iam::123:role/studio',
                 bucket: 'jobs-bucket',

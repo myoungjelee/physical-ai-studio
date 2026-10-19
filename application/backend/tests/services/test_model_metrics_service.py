@@ -5,7 +5,7 @@ import json
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, SSOTokenLoadError
 
 from schemas.remote_trainer import AwsBatchConnection
 from services.aws_batch import aws_batch_trainer_url
@@ -44,3 +44,34 @@ async def test_batch_metrics_wait_for_s3_and_emit_only_new_complete_rows(monkeyp
     make_session.assert_called_once_with(connection)
     client.get_object.assert_called_with(Bucket="job-bucket", Key="jobs/studio-job-id/metrics.csv")
     assert first.closed and unchanged.closed and second.closed
+
+
+async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkeypatch) -> None:
+    connection = AwsBatchConnection(
+        region="us-east-1",
+        profile_name="studio",
+        bucket="job-bucket",
+        studio_role_arn="arn",
+        targets={"gpu": {"queue": "queue", "job_definition": "definition"}},
+    )
+    session = MagicMock()
+    session.client.return_value.get_object.return_value = {"Body": BytesIO(b"step,train/loss\n1,2.5\n")}
+    monkeypatch.setattr(
+        "services.aws_batch._make_session",
+        MagicMock(
+            side_effect=[
+                SSOTokenLoadError(error_msg="expired"),
+                session,
+            ]
+        ),
+    )
+    monkeypatch.setattr("services.model_metrics_service.asyncio.sleep", AsyncMock())
+    stream = ModelMetricsService.tail_batch_csv_file(aws_batch_trainer_url(connection), "job")
+    try:
+        issue = await anext(stream)
+        assert issue.event == "aws_authentication"
+        assert json.loads(issue.data)["command"] == "aws sso login --profile=studio"
+        assert (await anext(stream)).data == "null"
+        assert json.loads((await anext(stream)).data) == {"step": 1, "train_loss": 2.5}
+    finally:
+        await stream.aclose()

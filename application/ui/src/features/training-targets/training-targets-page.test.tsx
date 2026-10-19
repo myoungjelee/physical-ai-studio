@@ -1,3 +1,5 @@
+import { toast } from '@geti-ui/ui';
+import { rs } from '@rstest/core';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
@@ -56,6 +58,7 @@ const awsTrainer: SchemaRemoteTrainer = {
         region: 'eu-west-1',
         studio_role_arn: 'arn:aws:iam::123456789012:role/studio',
         configuration_uri: 's3://config-bucket/studio-config.json',
+        profile_name: 'studio',
         bucket: 'jobs-bucket',
         targets: { 'g4dn.xlarge': { queue: 'queue-name', job_definition: 'definition-name' } },
     },
@@ -77,8 +80,10 @@ const providerSchema = [
 
 describe('TrainingTargetsPage', () => {
     beforeEach(() => {
+        rs.spyOn(toast, 'negative').mockReturnValue(rs.fn());
         server.use(
             http.get('/api/remote-trainers/providers', () => HttpResponse.json(providerSchema)),
+            http.get('/api/remote-trainers/providers/aws/auth', () => HttpResponse.json({ profiles: ['studio'] })),
             http.get(REMOTE_TRAINER_HEALTH_PATH, () => HttpResponse.json(healthyTrainer)),
             http.get('/api/remote-servers/feature-status', () => HttpResponse.json({ network_exposed: false }))
         );
@@ -343,7 +348,45 @@ describe('TrainingTargetsPage', () => {
         expect(screen.getAllByRole('button', { name: /^Add training target:/ })).toHaveLength(3);
     });
 
-    it('creates the AWS provider from only an S3 configuration URI', async () => {
+    it('validates the URI before advancing and preserves inputs when going back', async () => {
+        const user = userEvent.setup();
+        let resolutions = 0;
+        server.use(
+            http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json([])),
+            http.post('/api/remote-trainers/providers/aws/configuration', () => {
+                resolutions++;
+                return HttpResponse.json({ detail: 'Should not be called' }, { status: 400 });
+            })
+        );
+        render(<TrainingTargetsPage />);
+        await user.click(await screen.findByRole('button', { name: 'Add training target: AWS Provider' }));
+        const dialog = await screen.findByRole('dialog', { name: 'Deploy and configure AWS stack' });
+        expect(within(dialog).queryByRole('button', { name: /AWS profile/ })).not.toBeInTheDocument();
+        const uri = await within(dialog).findByRole('textbox', { name: /^S3 configuration file URI/ });
+        await user.type(uri, 's3://config-bucket');
+        expect(within(dialog).getByRole('button', { name: 'Next' })).toBeDisabled();
+        await user.type(uri, '/studio-config.json');
+        await user.click(within(dialog).getByRole('button', { name: 'Next' }));
+        expect(within(dialog).getByRole('button', { name: 'Connect' })).toBeDisabled();
+        expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
+        const picker = within(dialog).getByRole('button', { name: /AWS profile/ });
+        await waitFor(() => expect(picker).toBeEnabled());
+        await user.click(picker);
+        await user.click(await screen.findByRole('option', { name: 'studio' }));
+        expect(within(dialog).queryByRole('button', { name: 'Check connection' })).not.toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: 'Connect' })).toBeEnabled();
+        await user.click(within(dialog).getByRole('button', { name: 'Back' }));
+        expect(resolutions).toBe(0);
+        expect(dialog).toBeInTheDocument();
+        expect(within(dialog).getByRole('textbox', { name: /^S3 configuration file URI/ })).toHaveValue(
+            's3://config-bucket/studio-config.json'
+        );
+        await user.click(within(dialog).getByRole('button', { name: 'Next' }));
+        expect(within(dialog).getByRole('button', { name: /AWS profile/ })).toHaveTextContent('studio');
+    });
+
+    it('requires and saves a named profile when creating the AWS provider', async () => {
+        const profileName = 'studio';
         const user = userEvent.setup();
         let trainers: SchemaRemoteTrainer[] = [];
         let resolution: unknown;
@@ -351,12 +394,13 @@ describe('TrainingTargetsPage', () => {
             http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json(trainers)),
             http.post('/api/remote-trainers/providers/aws/configuration', async ({ request }) => {
                 resolution = await request.json();
-                return HttpResponse.json(
-                    awsTrainer.connection as Extract<
+                return HttpResponse.json({
+                    ...(awsTrainer.connection as Extract<
                         SchemaRemoteTrainer['connection'],
                         { connection_mode: 'aws_batch' }
-                    >
-                );
+                    >),
+                    profile_name: profileName,
+                });
             }),
             http.post(REMOTE_TRAINERS_PATH, async ({ request }) => {
                 const body = await request.json();
@@ -366,8 +410,8 @@ describe('TrainingTargetsPage', () => {
         );
         render(<TrainingTargetsPage />);
         await user.click(await screen.findByRole('button', { name: 'Add training target: AWS Provider' }));
-        const dialog = await screen.findByRole('dialog', { name: 'Add training target' });
-        expect(within(dialog).getByRole('button', { name: 'Add training target' })).toBeDisabled();
+        const dialog = await screen.findByRole('dialog', { name: 'Deploy and configure AWS stack' });
+        expect(within(dialog).getByRole('button', { name: 'Next' })).toBeDisabled();
         expect(within(dialog).queryByRole('textbox', { name: /^Name/ })).not.toBeInTheDocument();
         expect(dialog).not.toHaveTextContent(/instance/i);
         const deployLink = within(dialog).getByRole<HTMLAnchorElement>('link', { name: 'Deploy AWS Batch stack' });
@@ -384,16 +428,27 @@ describe('TrainingTargetsPage', () => {
             's3://config-bucket/studio-config.json'
         );
         expect(within(dialog).getAllByRole('textbox')).toHaveLength(1);
+        await user.click(within(dialog).getByRole('button', { name: 'Next' }));
+        expect(resolution).toBeUndefined();
+        expect(within(dialog).getByRole('button', { name: 'Connect' })).toBeDisabled();
+        const picker = within(dialog).getByRole('button', { name: /AWS profile/ });
+        await waitFor(() => expect(picker).toBeEnabled());
+        await user.click(picker);
+        await user.click(await screen.findByRole('option', { name: profileName }));
         expect(within(dialog).queryByRole('textbox', { name: /^Region/ })).not.toBeInTheDocument();
         expect(within(dialog).queryByRole('textbox', { name: /^Studio role ARN/ })).not.toBeInTheDocument();
-        await user.click(within(dialog).getByRole('button', { name: 'Add training target' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Connect' }));
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
         expect(resolution).toEqual({
             configuration_uri: 's3://config-bucket/studio-config.json',
+            profile_name: profileName,
         });
         expect(await screen.findByRole('button', { name: 'Edit AWS Provider' })).toBeInTheDocument();
         expect(trainers[0].name).toBe('AWS Provider');
-        expect(trainers[0].connection).toEqual(awsTrainer.connection);
+        expect(trainers[0].connection).toEqual({
+            ...awsTrainer.connection,
+            profile_name: profileName,
+        });
     });
 
     it('prefills AWS edits and refreshes resources when saving', async () => {
@@ -417,9 +472,11 @@ describe('TrainingTargetsPage', () => {
         );
         render(<TrainingTargetsPage />);
         await user.click(await screen.findByRole('button', { name: 'Edit AWS Provider' }));
-        const dialog = await screen.findByRole('dialog', { name: 'Edit training target' });
+        const dialog = await screen.findByRole('dialog', { name: 'Configure AWS stack' });
         expect(await within(dialog).findByDisplayValue('s3://config-bucket/studio-config.json')).toBeInTheDocument();
         expect(within(dialog).getAllByRole('textbox')).toHaveLength(1);
+        expect(within(dialog).queryByRole('link', { name: 'Deploy AWS Batch stack' })).not.toBeInTheDocument();
+        await user.click(within(dialog).getByRole('button', { name: 'Next' }));
         await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
         await waitFor(() => expect(updated).toMatchObject({ connection: { bucket: 'updated-bucket' } }));
     });
@@ -447,31 +504,60 @@ describe('TrainingTargetsPage', () => {
         );
         render(<TrainingTargetsPage />);
         await user.click(await screen.findByRole('button', { name: 'Add training target: AWS Provider' }));
-        const dialog = await screen.findByRole('dialog', { name: 'Add training target' });
+        const dialog = await screen.findByRole('dialog', { name: 'Deploy and configure AWS stack' });
         await user.type(
             await within(dialog).findByRole('textbox', { name: /^S3 configuration file URI/ }),
             's3://config-bucket/studio-config.json'
         );
-        await user.click(within(dialog).getByRole('button', { name: 'Add training target' }));
-        expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-            'Only one AWS Provider training target is allowed.'
+        await user.click(within(dialog).getByRole('button', { name: 'Next' }));
+        const picker = within(dialog).getByRole('button', { name: /AWS profile/ });
+        await waitFor(() => expect(picker).toBeEnabled());
+        await user.click(picker);
+        await user.click(await screen.findByRole('option', { name: 'studio' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Connect' }));
+        await waitFor(() =>
+            expect(toast.negative).toHaveBeenCalledWith(
+                'Only one AWS Provider training target is allowed.',
+                expect.any(Object)
+            )
         );
     });
 
-    it('keeps the AWS form open when configuration resolution fails', async () => {
+    it('shows copyable recovery and clears the save error when the profile changes', async () => {
         const user = userEvent.setup();
         server.use(
             http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json([awsTrainer])),
             http.post('/api/remote-trainers/providers/aws/configuration', () =>
-                HttpResponse.json({ detail: 'Cannot read the S3 configuration.' }, { status: 400 })
+                HttpResponse.json(
+                    {
+                        title: 'AWS SSO session expired',
+                        detail: 'Renew the studio profile on the backend host.',
+                        command: 'aws sso login --profile=studio',
+                        code: 'aws_credentials_expired',
+                    },
+                    { status: 400 }
+                )
+            ),
+            http.get('/api/remote-trainers/providers/aws/auth', () =>
+                HttpResponse.json({ profiles: ['studio', 'another-profile'] })
             )
         );
         render(<TrainingTargetsPage />);
         await user.click(await screen.findByRole('button', { name: 'Edit AWS Provider' }));
-        const dialog = await screen.findByRole('dialog', { name: 'Edit training target' });
+        const dialog = await screen.findByRole('dialog', { name: 'Configure AWS stack' });
         await within(dialog).findByDisplayValue('s3://config-bucket/studio-config.json');
+        await user.click(within(dialog).getByRole('button', { name: 'Next' }));
         await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
-        expect(await within(dialog).findByRole('alert')).toHaveTextContent('Cannot read the S3 configuration.');
+        await waitFor(() =>
+            expect(toast.negative).toHaveBeenCalledWith(
+                'Renew the studio profile on the backend host.',
+                expect.objectContaining({ actionLabel: 'Copy command' })
+            )
+        );
+        expect(within(dialog).getByRole('button', { name: /AWS profile/ })).toHaveTextContent('studio');
         expect(dialog).toBeInTheDocument();
+        await user.click(within(dialog).getByRole('button', { name: /AWS profile/ }));
+        await user.click(await screen.findByRole('option', { name: 'another-profile' }));
+        expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
     });
 });

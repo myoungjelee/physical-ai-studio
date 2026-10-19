@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from schemas.aws_auth import AwsAuthenticationIssue, AwsCredentialSelection, AwsProfileName
 from schemas.base import UTCDatetime
 from schemas.hardware import DeviceInfo, StorageInfo
 from schemas.remote_server import SSH_HOST_ALIAS_PATTERN
@@ -99,7 +100,7 @@ class AwsBatchTarget(BaseModel):
     job_definition: str = Field(min_length=1, max_length=2048)
 
 
-class AwsBatchProviderConfiguration(BaseModel):
+class AwsBatchProviderConfiguration(AwsCredentialSelection):
     """Connection details used to load a provisioned AWS Batch configuration."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -125,6 +126,9 @@ class CloudProviderError(BaseModel):
     """Sanitized provider configuration resolution failure."""
 
     detail: str
+    code: str | None = None
+    title: str | None = None
+    command: str | None = None
 
 
 class CloudProviderSchema(BaseModel):
@@ -157,6 +161,7 @@ class AwsBatchConnection(BaseModel):
     region: str = Field(min_length=1, max_length=64)
     studio_role_arn: str = Field(min_length=1, max_length=2048)
     configuration_uri: str | None = None
+    profile_name: AwsProfileName = "default"
     bucket: str = Field(min_length=3, max_length=63)
     targets: dict[str, AwsBatchTarget] = Field(min_length=1, description="Instance type -> Batch resources.")
 
@@ -217,3 +222,4 @@ class RemoteTrainerHealth(BaseModel):
         description="Available storage on the trainer, when reported. Absence does not affect health status.",
     )
     reason_code: str | None = None
+    authentication_issue: AwsAuthenticationIssue | None = None
