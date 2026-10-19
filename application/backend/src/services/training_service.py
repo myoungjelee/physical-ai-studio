@@ -76,7 +76,7 @@ class TrainingService:
         """
         Reconcile RUNNING training jobs left behind by a previous process.
 
-        Called on training-worker setup and teardown. Remote trainers run
+        Called by the scheduler on startup, worker exit, and shutdown. Remote trainers run
         independently of Studio, so a RUNNING job that
         already recorded its ``remote_job_id`` is requeued (back to PENDING) to
         reattach and mirror progress on the next pickup -- this is what lets a run

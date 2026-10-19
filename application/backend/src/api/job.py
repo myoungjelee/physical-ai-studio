@@ -71,7 +71,7 @@ async def interrupt_job(
     if job.status == JobStatus.RUNNING and isinstance(job, TrainJob):
         # Keep the job RUNNING until the worker has stopped and flushed progress.
         # Otherwise Delete can remove it while the worker still owns it.
-        scheduler.job_interrupt_flags[str(job_id)] = True
+        scheduler.cancel_job(job_id)
         return
     await job_service.update_job_status(job_id, status=JobStatus.CANCELED)
 
