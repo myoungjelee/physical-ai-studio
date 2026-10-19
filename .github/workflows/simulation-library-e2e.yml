@@ -45,8 +45,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/simulation-environment
-      - uses: ./.github/actions/start-simulator
+      - uses: $/.github/actions/simulation-environment
+      - uses: $/.github/actions/start-simulator
       - name: Verify seeded expert and no-action episodes
         working-directory: library
         run: |
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/simulation-environment
+      - uses: $/.github/actions/simulation-environment
       - name: Check qualification and simulator baseline
         id: qualification
         working-directory: library
@@ -117,7 +117,7 @@ jobs:
             echo 'Simulator controls failed; quality evaluation is blocked' >&2
             exit 1
           fi
-      - uses: ./.github/actions/start-simulator
+      - uses: $/.github/actions/start-simulator
         if: matrix.mode == 'evaluate' && steps.qualification.outputs.qualified == 'true'
       - name: Run bounded training or qualified export and evaluation
         working-directory: library

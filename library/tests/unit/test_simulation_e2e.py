@@ -281,7 +281,9 @@ def test_final_checkpoint_includes_steps_after_periodic_save(tmp_path, monkeypat
             return torch.optim.SGD(self.parameters(), lr=0.01)
 
         def train_dataloader(self):
-            return DataLoader(TensorDataset(torch.ones(4, 1)), batch_size=2)
+            # This test runs exclusively on CPU, so there are no CUDA transfers to accelerate.
+            # nosemgrep: trailofbits.python.automatic-memory-pinning.automatic-memory-pinning
+            return DataLoader(TensorDataset(torch.ones(4, 1)), batch_size=2, pin_memory=False)
 
     real_trainer = suite.Trainer
 
@@ -300,6 +302,8 @@ def test_final_checkpoint_includes_steps_after_periodic_save(tmp_path, monkeypat
     # Avoid importing a local test class from checkpoint hyperparameters; inspect the locally generated data below.
     monkeypatch.setattr(suite, "get_physicalai_policy_class", lambda name: MagicMock())
     suite._train("act", tmp_path, tmp_path, "train")
+    # This test reads only the checkpoint it just generated, using the restricted weights-only unpickler.
+    # nosemgrep: trailofbits.python.pickles-in-pytorch.pickles-in-pytorch
     saved = torch.load(tmp_path / "checkpoints/last.ckpt", weights_only=True)
     assert saved["global_step"] == 3
 
