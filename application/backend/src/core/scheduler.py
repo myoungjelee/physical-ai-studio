@@ -181,7 +181,9 @@ class Scheduler:
         active_ids = frozenset(job.id for _, job in self.processes.values())
         async with get_async_db_session_ctx() as session:
             service = JobService(session, RemoteTrainerService(session))
-            await TrainingService.abort_orphan_jobs(service, exclude_job_ids=active_ids)
+            recovered = await TrainingService.abort_orphan_jobs(service, exclude_job_ids=active_ids)
+            for job in recovered:
+                self.event_queue.put((EventType.JOB_UPDATE, job))
             imports = await service.get_job_list(
                 extra_filters={"status": JobStatus.RUNNING, "type": JobType.DATASET_IMPORT}
             )

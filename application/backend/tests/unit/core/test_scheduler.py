@@ -11,6 +11,7 @@ from core.scheduler import Scheduler, _run_job
 from schemas.base_job import JobStatus, JobType
 from schemas.dataset_import_job import DatasetImportJobPayload, ImportStep
 from schemas.job import DatasetImportJob, LocalTrainJobPayload, RemoteTrainJobPayload, TrainingDevice, TrainJob
+from services.event_processor import EventType
 from services.training_targets import target_key
 
 MODULE = "core.scheduler"
@@ -57,6 +58,7 @@ def services():
         patch(f"{MODULE}.DatasetImportService") as import_service,
         patch(f"{MODULE}.TrainingService.abort_orphan_jobs", new_callable=AsyncMock) as recover,
     ):
+        recover.return_value = []
         jobs = job_service.return_value
         jobs.get_pending_train_jobs = AsyncMock(return_value=[])
         jobs.get_job_list = AsyncMock(return_value=[])
@@ -270,6 +272,18 @@ async def test_process_start_failure_is_reaped(scheduler, services):
     jobs.update_job_status.assert_awaited_once_with(
         job.id, JobStatus.FAILED, message="Dataset import worker stopped before completing the job"
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [JobStatus.FAILED, JobStatus.PENDING])
+async def test_recovery_emits_updated_training_jobs(scheduler, services, status):
+    job = _training_job(trainer_id=uuid4() if status == JobStatus.PENDING else None)
+    job.status = status
+    services[2].return_value = [job]
+
+    await scheduler._recover_jobs()
+
+    scheduler.event_queue.put.assert_called_once_with((EventType.JOB_UPDATE, job))
 
 
 @pytest.mark.anyio

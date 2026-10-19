@@ -24,7 +24,7 @@ from schemas import Snapshot
 from schemas.base_job import JobStatus
 from schemas.dataset_import_job import DatasetImportJobPayload, ImportStep
 from schemas.job import DatasetImportJob, LocalTrainJobPayload, RemoteTrainJobPayload, TrainJob
-from services.event_processor import EventProcessor
+from services.event_processor import EventProcessor, EventType
 from services.job_service import JobService
 
 
@@ -201,6 +201,12 @@ async def test_killed_worker_releases_target_and_next_job_runs(migrated_db, monk
         await scheduler._reap_processes()
         assert not scheduler.processes
         assert not scheduler._cancel_events
+        while True:
+            event, recovered = await asyncio.to_thread(scheduler.event_queue.get, True, 5)
+            if recovered.id == jobs[0].id:
+                break
+        assert event == EventType.JOB_UPDATE
+        assert recovered.status == JobStatus.FAILED
         async with get_async_db_session_ctx() as session:
             assert (await JobService(session).get_job_by_id(jobs[0].id)).status == JobStatus.FAILED
         await scheduler._schedule_jobs()
@@ -294,8 +300,18 @@ async def test_killed_remote_worker_reattaches_without_resubmitting(migrated_db,
     monkeypatch.setattr("core.scheduler.mp", mp.get_context("spawn"))
     scheduler = Scheduler()
     processor = EventProcessor(scheduler.event_queue)
+    updates = asyncio.Queue()
+
+    def capture_update(event, updated):
+        if updated.id == job.id:
+            updates.put_nowait(updated)
+
+    processor.subscribe([EventType.JOB_UPDATE], capture_update)
     try:
         await scheduler._recover_jobs()
+        recovered_update = await asyncio.wait_for(updates.get(), timeout=5)
+        assert recovered_update.id == job.id
+        assert recovered_update.status == JobStatus.PENDING
         await scheduler._schedule_jobs()
         assert await asyncio.to_thread(attached.get, True, 30) == f"/jobs/{remote_job_id}/events"
         process = next(iter(scheduler.processes.values()))[0]
@@ -316,6 +332,9 @@ async def test_killed_remote_worker_reattaches_without_resubmitting(migrated_db,
             recovered = await service.get_job_by_id(job.id)
             assert recovered.status == JobStatus.PENDING
             assert recovered.payload.remote_job_id == remote_job_id
+        recovered_update = await asyncio.wait_for(updates.get(), timeout=5)
+        assert recovered_update.id == job.id
+        assert recovered_update.status == JobStatus.PENDING
         await scheduler._schedule_jobs()
         assert await asyncio.to_thread(attached.get, True, 30) == f"/jobs/{remote_job_id}/events"
         process = next(iter(scheduler.processes.values()))[0]
