@@ -37,9 +37,6 @@ abandoned jobs, and stops active workers during application shutdown. Per-job
 multiprocessing events handle cancellation without a manager process. Shutdown
 keeps the API event loop free to drain worker events while joining processes.
 
-See [scheduler measurements](docs/explanation/job-scheduler-measurements.md) for
-the memory savings and worker-start latency trade-off.
-
 ## Setup
 
 ### Prerequisites
