@@ -218,7 +218,45 @@ def test_weekly_report_does_not_promote_missing_or_zero_scores(tmp_path):
     assert "| xr0 | failed/incomplete | not evaluated | not evaluated | baseline unavailable |" in report
 
 
-def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch):
+@pytest.mark.parametrize("chunk_size", [1, 4, 100])
+def test_act_execution_drains_chunks_without_blending(chunk_size):
+    calls = []
+
+    def predict(observation):
+        calls.append(len(actions))
+        return np.arange((len(calls) - 1) * 1000, (len(calls) - 1) * 1000 + chunk_size, dtype=np.float32)[:, None]
+
+    model = SimpleNamespace(predict_action_chunk=predict, reset=lambda: None)
+    source = suite._policy_source(model, "act")
+    source.action_queue.push_chunk(np.ones((2, 1), dtype=np.float32))
+    source.action_queue.push_chunk(np.zeros((2, 1), dtype=np.float32))
+    np.testing.assert_array_equal(source.action_queue.pop(), [0])
+    source.connect(bus=MagicMock(), session_id="test")
+    actions = []
+    try:
+        for _ in range(3 * chunk_size):
+            actions.append(source.update(SimpleNamespace(state=np.zeros(6), images=None), {}, len(actions)))
+        expected = np.concatenate([np.arange(i * 1000, i * 1000 + chunk_size) for i in range(3)])
+        np.testing.assert_array_equal(np.asarray(actions)[:, 0], expected)
+        assert calls == [0, chunk_size, 2 * chunk_size]
+    finally:
+        source.disconnect()
+
+
+@pytest.mark.parametrize("name", [name for name in controls.POLICIES if name != "act"])
+def test_other_policies_keep_existing_execution(name, monkeypatch):
+    make_source = MagicMock()
+    make_execution = MagicMock()
+    monkeypatch.setattr(suite, "PolicySource", make_source)
+    monkeypatch.setattr(suite, "SyncExecution", make_execution)
+    model = MagicMock()
+    suite._policy_source(model, name)
+    make_execution.assert_called_once_with(request_threshold=0.5)
+    make_source.assert_called_once_with(model=model, execution=make_execution.return_value)
+
+
+@pytest.mark.parametrize("name", ["act", "smolvla"])
+def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch, name):
     events = []
     monkeypatch.setattr(suite, "SEEDS", (42,))
     monkeypatch.setenv("SIM_E2E_HTTP_URL", "http://localhost")
@@ -230,7 +268,9 @@ def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch):
     monkeypatch.setattr(suite, "InferenceModel", MagicMock())
     monkeypatch.setattr(suite, "SharedRobot", MagicMock())
     monkeypatch.setattr(suite, "IPCamera", MagicMock())
-    monkeypatch.setattr(suite, "PolicySource", MagicMock())
+    source = MagicMock()
+    source.reset.side_effect = lambda: events.append("reset_source")
+    monkeypatch.setattr(suite, "PolicySource", MagicMock(return_value=source))
     monitor = MagicMock(actions_sent=2, max_joint_change=2)
     monitor.begin.side_effect = lambda before: events.append("begin")
     monitor.result.return_value = {"score": 0.7}
@@ -238,8 +278,9 @@ def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch):
     runtime = MagicMock()
     runtime.run.side_effect = lambda **kwargs: events.append("run")
     monkeypatch.setattr(suite, "RobotRuntime", MagicMock(return_value=runtime))
-    suite._trials(tmp_path, {"fps": 30, "features": {"observation.images.wrist": {}}}, tmp_path, "act")
-    assert events == ["prepare", "run", "prepare", "begin", "resume", "run", "pause"]
+    suite._trials(tmp_path, {"fps": 30, "features": {"observation.images.wrist": {}}}, tmp_path, name)
+    reset = ["reset_source"] if name == "act" else []
+    assert events == ["prepare", "run", "prepare", *reset, "begin", "resume", "run", "pause"]
     runtime.disconnect.assert_called_once()
 
 
