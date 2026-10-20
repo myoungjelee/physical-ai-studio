@@ -410,7 +410,7 @@ Resources:
       Timeout:
         AttemptDurationSeconds: !Ref JobTimeoutSeconds
       ContainerProperties:
-        Image: ghcr.io/mpryahin/physicalai-trainer-cuda:main
+        Image: ghcr.io/open-edge-platform/physicalai-trainer-cuda:main
         Command:
           - /bin/sh
           - -c
@@ -446,7 +446,7 @@ Resources:
       Timeout:
         AttemptDurationSeconds: !Ref JobTimeoutSeconds
       ContainerProperties:
-        Image: ghcr.io/mpryahin/physicalai-trainer-cuda:main
+        Image: ghcr.io/open-edge-platform/physicalai-trainer-cuda:main
         Command:
           - /bin/sh
           - -c
@@ -482,7 +482,7 @@ Resources:
       Timeout:
         AttemptDurationSeconds: !Ref JobTimeoutSeconds
       ContainerProperties:
-        Image: ghcr.io/mpryahin/physicalai-trainer-cuda:main
+        Image: ghcr.io/open-edge-platform/physicalai-trainer-cuda:main
         Command:
           - /bin/sh
           - -c
