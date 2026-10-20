@@ -297,6 +297,7 @@ class TestTraining:
 
             await worker._train_model(job, model, snapshot, payload, base_model=None)
 
+            backend.train.assert_not_awaited()
             model_service.create_model.assert_not_called()
             assert job_service.update_job_status.call_args_list[0].kwargs["status"] == JobStatus.CANCELED
 

@@ -336,12 +336,13 @@ async def test_killed_remote_worker_reattaches_without_resubmitting(migrated_db,
         assert recovered_update.id == job.id
         assert recovered_update.status == JobStatus.PENDING
         await scheduler._schedule_jobs()
-        assert await asyncio.to_thread(attached.get, True, 30) == f"/jobs/{remote_job_id}/events"
+        assert await asyncio.to_thread(finish.wait, 30)
         process = next(iter(scheduler.processes.values()))[0]
         assert process.pid != original_pid
-        finish.set()
         await asyncio.to_thread(process.join, 30)
         assert not process.is_alive()
+        # A canceled reattachment now sends cancel before opening another event stream.
+        assert attached.empty()
         await scheduler._reap_processes()
         async with get_async_db_session_ctx() as session:
             final = await JobService(session).get_job_by_id(job.id)
