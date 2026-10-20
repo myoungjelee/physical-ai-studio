@@ -122,7 +122,8 @@ def _probe_sync(connection: AwsBatchConnection) -> tuple[HealthStatus, str | Non
     try:
         session = _make_session(connection)
         batch = session.client("batch")
-        queues = batch.describe_job_queues(jobQueues=[t.queue for t in connection.targets.values()])["jobQueues"]
+        queue_names = list(dict.fromkeys(t.queue for t in connection.targets.values()))
+        queues = batch.describe_job_queues(jobQueues=queue_names)["jobQueues"]
     except (BotoCoreError, ClientError) as exc:
         from services.aws_auth_service import authentication_issue, credential_error_reason
 
@@ -131,7 +132,7 @@ def _probe_sync(connection: AwsBatchConnection) -> tuple[HealthStatus, str | Non
         code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
         logger.debug("AWS Batch probe failed: {}", exc)
         return "unreachable", code or "aws_unavailable", None
-    if len(queues) != len(connection.targets):
+    if len(queues) != len(queue_names):
         return "degraded", "job_queue_missing", None
     if any(q.get("state") != "ENABLED" or q.get("status") != "VALID" for q in queues):
         return "degraded", "job_queue_disabled", None
