@@ -628,8 +628,8 @@ class RemoteTrainerService:
         if host_changed or previous.ssh_remote_port != current.ssh_remote_port:
             await persistent_trainer.stop(remote_trainer, remove_volume=host_changed)
 
-    async def delete_remote_trainer(self, remote_trainer_id: UUID) -> None:
-        """Delete a trainer unless its managed container has queued or running jobs."""
+    async def delete_remote_trainer(self, remote_trainer_id: UUID, *, forget_locally: bool = False) -> None:
+        """Delete a trainer; optionally leave unreachable SSH resources untouched."""
         remote_trainer = await self.repo.get_by_id(remote_trainer_id)
         if remote_trainer is None:
             raise ResourceNotFoundError(ResourceType.REMOTE_TRAINER, str(remote_trainer_id))
@@ -638,14 +638,10 @@ class RemoteTrainerService:
         if isinstance(remote_trainer.connection, SshConnection):
             await self._require_no_active_jobs(remote_trainer_id)
         await self._cancel_launch(remote_trainer_id)
-        try:
+        if forget_locally:
+            persistent_trainer.clear_launch_state(remote_trainer_id)
+        else:
             await persistent_trainer.stop(remote_trainer)
-        except Exception as error:
-            logger.warning(
-                "Could not clean up remote container for trainer '{}'; removing its local configuration: {}",
-                remote_trainer.name,
-                error,
-            )
         await remote_trainer_tunnel_manager.stop_tunnel(remote_trainer_id)
         await self.repo.delete_by_id(remote_trainer_id)
 

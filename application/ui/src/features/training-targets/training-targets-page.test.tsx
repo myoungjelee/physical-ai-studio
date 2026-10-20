@@ -2,7 +2,7 @@ import { toast } from '@geti-ui/ui';
 import { rs } from '@rstest/core';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse } from 'msw';
+import { HttpResponse, http as mswHttp } from 'msw';
 
 import { SchemaRemoteTrainer } from '../../api/openapi-spec';
 import { http } from '../../api/utils';
@@ -307,6 +307,66 @@ describe('TrainingTargetsPage', () => {
             await waitFor(() => expect(reboots).toBe(1));
         }
     );
+
+    it('shows progress and offers force removal when remote cleanup fails', async () => {
+        const user = userEvent.setup();
+        let failCleanup!: () => void;
+        const cleanup = new Promise<void>((resolve) => (failCleanup = resolve));
+        const trainer = sshTrainer('lost-host');
+        let trainers = [trainer];
+        const forgetLocally: string[] = [];
+        server.use(
+            http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json(trainers)),
+            mswHttp.delete('http://localhost:7860/api/remote-trainers/:remote_trainer_id', async ({ request }) => {
+                const forget = new URL(request.url).searchParams.get('forget_locally');
+                forgetLocally.push(forget ?? '');
+                if (forget !== 'true') {
+                    await cleanup;
+                    return HttpResponse.json({ message: 'The SSH host is unreachable.' }, { status: 503 });
+                }
+                trainers = [];
+                return new HttpResponse(null, { status: 204 });
+            })
+        );
+
+        render(<TrainingTargetsPage />);
+
+        await user.click(await screen.findByRole('button', { name: `Remove ${trainer.name}` }));
+        expect(screen.getByRole('checkbox', { name: /Force remove locally/i })).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Remove' }));
+        expect(await screen.findByText(/SSH cleanup may take a while/)).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: /Force remove locally/i })).toBeDisabled();
+        failCleanup();
+        expect(await screen.findByText('The SSH host is unreachable.')).toBeInTheDocument();
+        await user.click(screen.getByRole('checkbox', { name: /Force remove locally/i }));
+        await user.click(screen.getByRole('button', { name: 'Force remove' }));
+
+        expect(await screen.findByText('No training targets added')).toBeInTheDocument();
+        expect(forgetLocally).toEqual(['false', 'true']);
+    });
+
+    it('force removes an unreachable SSH trainer without waiting for remote cleanup', async () => {
+        const user = userEvent.setup();
+        const trainer = sshTrainer('lost-host');
+        let trainers = [trainer];
+        const forgetLocally: string[] = [];
+        server.use(
+            http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json(trainers)),
+            http.delete(REMOTE_TRAINER_PATH, ({ request }) => {
+                forgetLocally.push(new URL(request.url).searchParams.get('forget_locally') ?? '');
+                trainers = [];
+                return new HttpResponse(null, { status: 204 });
+            })
+        );
+
+        render(<TrainingTargetsPage />);
+        await user.click(await screen.findByRole('button', { name: `Remove ${trainer.name}` }));
+        await user.click(screen.getByRole('checkbox', { name: /Force remove locally/i }));
+        await user.click(screen.getByRole('button', { name: 'Force remove' }));
+
+        expect(await screen.findByText('No training targets added')).toBeInTheDocument();
+        expect(forgetLocally).toEqual(['true']);
+    });
 
     it('deletes a configured remote trainer', async () => {
         const user = userEvent.setup();

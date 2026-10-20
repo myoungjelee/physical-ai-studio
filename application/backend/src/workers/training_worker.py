@@ -155,6 +155,9 @@ class TrainingWorker(BaseProcessWorker):
                 version=base_model.version + 1 if base_model else 1,
                 created_at=None,
             )
+            async with get_async_db_session_ctx() as session:
+                if not await JobService(session).transition_pending_train_job(job.id, JobStatus.RUNNING):
+                    return
             await self._train_model(job, model, snapshot, payload, base_model)
 
     async def setup(self) -> None:
@@ -237,6 +240,8 @@ class TrainingWorker(BaseProcessWorker):
                 on_authentication_issue=lambda issue: self._report_authentication_issue(job.id, payload, issue),
             )
 
+            if context.should_cancel_job() and payload.remote_job_id is None:
+                raise TrainingCanceledError("Training canceled before start")
             backend = await get_training_backend(payload)
             await backend.train(context)
             # The local backend stops cooperatively without raising; treat a
