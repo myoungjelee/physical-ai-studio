@@ -117,6 +117,8 @@ def authentication_issue(error: Exception, profile_name: str) -> AwsAuthenticati
     }:
         return None
     recovery = aws_auth_error(error, profile_name)
+    if recovery.code is None or recovery.title is None:
+        raise ValueError("AWS authentication recovery requires a code and title")
     if recovery.command is None:
         recovery.detail = f'Profile "{profile_name}": {recovery.detail}'
     return AwsAuthenticationIssue(
