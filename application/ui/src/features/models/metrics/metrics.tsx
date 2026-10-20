@@ -102,9 +102,9 @@ const useJobMetrics = (jobId: string) => {
                             setAuthenticationIssue(issue);
                             if (issue) {
                                 affectedProfile = issue.profile_name;
-                                notifyAwsAuthentication(issue);
+                                notifyAwsAuthentication(issue, `metrics:${jobId}`);
                             } else if (affectedProfile) {
-                                clearAwsAuthentication(affectedProfile);
+                                clearAwsAuthentication(affectedProfile, `metrics:${jobId}`);
                                 affectedProfile = undefined;
                             }
                         },

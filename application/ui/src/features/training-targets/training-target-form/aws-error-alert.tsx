@@ -53,7 +53,7 @@ export const observeAwsTrainerAuthentication = (trainerId: string) => {
                 }
                 state.profileName = issue.profile_name;
                 notifyAwsAuthentication(issue, source);
-            } else if (health.status === 'healthy' && state.profileName) {
+            } else if ((health.status === 'healthy' || health.status === 'degraded') && state.profileName) {
                 clearAwsAuthentication(state.profileName, source);
                 state.profileName = undefined;
                 prune();

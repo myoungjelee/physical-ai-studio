@@ -345,7 +345,10 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
                 // poll, so re-check availability right before submitting the job.
                 const latestHealth = await checkRemoteTrainerHealth();
                 if (latestHealth?.authentication_issue) {
-                    notifyAwsAuthentication(latestHealth.authentication_issue);
+                    notifyAwsAuthentication(
+                        latestHealth.authentication_issue,
+                        `trainer:${targetRawId(selectedTarget.id)}`
+                    );
                     return;
                 }
                 if (
