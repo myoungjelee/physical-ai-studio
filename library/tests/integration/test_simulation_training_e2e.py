@@ -26,7 +26,7 @@ import pytest
 from lightning.pytorch.callbacks import ModelCheckpoint
 from physicalai.capture import IPCamera
 from physicalai.robot import SharedRobot
-from physicalai.runtime import ChunkedActionQueue, PolicySource, RobotRuntime, SyncExecution
+from physicalai.runtime import PolicySource, RobotRuntime, SyncExecution
 
 from physicalai.data import LeRobotDataModule
 from physicalai.inference import InferenceModel
@@ -133,14 +133,6 @@ def _record_video(
                 raise RuntimeError(f"ffmpeg did not save an inference video; see {log_path}")
 
 
-def _policy_source(model: InferenceModel, name: str) -> PolicySource:
-    if name == "act":
-        # Match native ACT's queue: execute the full chunk without crossfading.
-        return PolicySource(model=model, execution=SyncExecution(request_threshold=0.0),
-                            action_queue=ChunkedActionQueue())
-    return PolicySource(model=model, execution=SyncExecution(request_threshold=0.5))
-
-
 def _trials(export: Path, metadata: dict, output: Path, name: str) -> list[dict]:
     url = os.environ["SIM_E2E_HTTP_URL"]
     owner = os.environ["SIM_E2E_OWNER"]
@@ -157,10 +149,9 @@ def _trials(export: Path, metadata: dict, output: Path, name: str) -> list[dict]
             before = prepare_episode(url, seed, "off", 0.04)
             stop = threading.Event()
             monitor = EpisodeMonitor(url, before, stop, float(os.environ.get("SIM_E2E_ROLLOUT_SECONDS", "180")))
-            source = _policy_source(model, name)
             runtime = RobotRuntime(
                 robot=SharedRobot.attach(name=owner),
-                action_source=source,
+                action_source=PolicySource(model=model, execution=SyncExecution(request_threshold=0.5)),
                 cameras={key: IPCamera(url=f"{url.rstrip('/')}/cameras/{camera_map.get(key, key)}/mjpeg")
                          for key in cameras},
                 fps=float(metadata["fps"]), callbacks=[monitor],
@@ -172,8 +163,6 @@ def _trials(export: Path, metadata: dict, output: Path, name: str) -> list[dict]
                     runtime.run(stop_event=stop)
                     stop.clear()
                     before = prepare_episode(url, seed, "off", 0.04)
-                    if name == "act":
-                        source.reset()  # Discard warmup actions after resetting the scene.
                     monitor.begin(before)
                     command(url, "episode/auto-reset", {"enabled": True})
                     wait_health(url, lambda h: h["episode"]["active"])
