@@ -5,6 +5,7 @@ import json
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from botocore.exceptions import ClientError, SSOTokenLoadError
 
 from schemas.remote_trainer import AwsBatchConnection
@@ -46,7 +47,8 @@ async def test_batch_metrics_wait_for_s3_and_emit_only_new_complete_rows(monkeyp
     assert first.closed and unchanged.closed and second.closed
 
 
-async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkeypatch) -> None:
+@pytest.mark.parametrize("missing_code", [None, "NoSuchKey", "404"])
+async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkeypatch, missing_code) -> None:
     connection = AwsBatchConnection(
         region="us-east-1",
         profile_name="studio",
@@ -55,7 +57,11 @@ async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkey
         targets={"gpu": {"queue": "queue", "job_definition": "definition"}},
     )
     session = MagicMock()
-    session.client.return_value.get_object.return_value = {"Body": BytesIO(b"step,train/loss\n1,2.5\n")}
+    client = session.client.return_value
+    client.get_object.side_effect = [
+        *([ClientError({"Error": {"Code": missing_code}}, "GetObject")] if missing_code else []),
+        {"Body": BytesIO(b"step,train/loss\n1,2.5\n")},
+    ]
     monkeypatch.setattr(
         "services.aws_batch._make_session",
         MagicMock(
@@ -65,13 +71,18 @@ async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkey
             ]
         ),
     )
-    monkeypatch.setattr("services.model_metrics_service.asyncio.sleep", AsyncMock())
+    sleep = AsyncMock()
+    monkeypatch.setattr("services.model_metrics_service.asyncio.sleep", sleep)
     stream = ModelMetricsService.tail_batch_csv_file(aws_batch_trainer_url(connection), "job")
     try:
         issue = await anext(stream)
         assert issue.event == "aws_authentication"
         assert json.loads(issue.data)["command"] == "aws sso login --profile=studio"
-        assert (await anext(stream)).data == "null"
+        recovery = await anext(stream)
+        assert recovery.event == "aws_authentication"
+        assert recovery.data == "null"
+        assert client.get_object.call_count == 1
+        sleep.assert_awaited_once_with(5)
         assert json.loads((await anext(stream)).data) == {"step": 1, "train_loss": 2.5}
     finally:
         await stream.aclose()

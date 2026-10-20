@@ -2,7 +2,12 @@ import { toast } from '@geti-ui/ui';
 import { rs } from '@rstest/core';
 import userEvent from '@testing-library/user-event';
 
-import { clearAwsAuthentication, notifyAwsAuthentication, showAwsError } from './aws-error-alert';
+import {
+    clearAwsAuthentication,
+    notifyAwsAuthentication,
+    observeAwsTrainerAuthentication,
+    showAwsError,
+} from './aws-error-alert';
 
 describe('AWS error toast', () => {
     beforeEach(() => {
@@ -54,5 +59,37 @@ describe('AWS error toast', () => {
         notifyAwsAuthentication(issue);
         expect(negative).toHaveBeenCalledTimes(2);
         clearAwsAuthentication(issue.profile_name);
+    });
+
+    it('keeps trainer and non-health warnings independent for the same profile', () => {
+        const close = rs.fn();
+        const negative = rs.spyOn(toast, 'negative').mockReturnValue(close);
+        const issue = {
+            profile_name: 'shared-studio',
+            code: 'aws_credentials_expired',
+            title: 'Session expired',
+            detail: 'Renew shared-studio.',
+            command: 'aws sso login --profile=shared-studio',
+        };
+        const observer = observeAwsTrainerAuthentication('shared-trainer');
+        const health = {
+            remote_trainer_id: 'shared-trainer',
+            status: 'healthy' as const,
+            checked_at: '2026-10-20T12:00:00Z',
+            devices: [],
+        };
+        observer.update({ ...health, authentication_issue: issue });
+        notifyAwsAuthentication(issue);
+        clearAwsAuthentication(issue.profile_name);
+        expect(close).not.toHaveBeenCalled();
+
+        notifyAwsAuthentication(issue);
+        observer.update(health);
+        observer.unsubscribe();
+        expect(close).not.toHaveBeenCalled();
+        expect(negative).toHaveBeenCalledOnce();
+
+        clearAwsAuthentication(issue.profile_name);
+        expect(close).toHaveBeenCalledOnce();
     });
 });

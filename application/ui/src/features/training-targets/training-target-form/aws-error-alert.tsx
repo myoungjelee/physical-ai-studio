@@ -3,18 +3,60 @@ import { useEffect } from 'react';
 import { toast } from '@geti-ui/ui';
 
 import { getApiErrorMessage } from '../../../api/errors';
-import { SchemaAwsAuthenticationIssue } from '../../../api/openapi-spec';
+import { SchemaAwsAuthenticationIssue, SchemaRemoteTrainerHealth } from '../../../api/openapi-spec';
 
-const authenticationToasts = new Map<string, () => void>();
+const authenticationToasts = new Map<string, { close: () => void; sources: Set<string> }>();
+const trainerAuthentication = new Map<string, { observers: number; profileName?: string }>();
 
-export const notifyAwsAuthentication = (issue: SchemaAwsAuthenticationIssue) => {
-    if (authenticationToasts.has(issue.profile_name)) return;
-    authenticationToasts.set(issue.profile_name, showAwsError(issue));
+export const notifyAwsAuthentication = (issue: SchemaAwsAuthenticationIssue, source = 'profile') => {
+    let notification = authenticationToasts.get(issue.profile_name);
+    if (!notification) {
+        notification = { close: showAwsError(issue), sources: new Set() };
+        authenticationToasts.set(issue.profile_name, notification);
+    }
+    notification.sources.add(source);
 };
 
-export const clearAwsAuthentication = (profileName: string) => {
-    authenticationToasts.get(profileName)?.();
-    authenticationToasts.delete(profileName);
+export const clearAwsAuthentication = (profileName: string, source = 'profile') => {
+    const notification = authenticationToasts.get(profileName);
+    if (!notification) return;
+    notification.sources.delete(source);
+    if (notification.sources.size === 0) {
+        notification.close();
+        authenticationToasts.delete(profileName);
+    }
+};
+
+export const observeAwsTrainerAuthentication = (trainerId: string) => {
+    const state = trainerAuthentication.get(trainerId) ?? { observers: 0 };
+    trainerAuthentication.set(trainerId, state);
+    state.observers++;
+    const source = `trainer:${trainerId}`;
+    const prune = () => {
+        if (state.observers === 0 && !state.profileName) trainerAuthentication.delete(trainerId);
+    };
+    return {
+        update: (health: SchemaRemoteTrainerHealth | undefined) => {
+            if (health?.remote_trainer_id !== trainerId) return;
+            const issue = health.authentication_issue;
+            if (issue) {
+                if (state.profileName && state.profileName !== issue.profile_name) {
+                    clearAwsAuthentication(state.profileName, source);
+                }
+                state.profileName = issue.profile_name;
+                notifyAwsAuthentication(issue, source);
+            } else if (health.status === 'healthy' && state.profileName) {
+                clearAwsAuthentication(state.profileName, source);
+                state.profileName = undefined;
+                prune();
+            }
+        },
+        unsubscribe: () => {
+            state.observers--;
+            // Keep unresolved trainer/profile associations across unmounts and query eviction.
+            prune();
+        },
+    };
 };
 
 export const showAwsError = (error: unknown) => {

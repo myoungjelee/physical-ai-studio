@@ -22,11 +22,12 @@ import { TrainingRow } from './job-table';
  * `ReferenceError: EventSource is not defined`. The stub resolves the stream
  * immediately so the async iterator in `fetchSSE` terminates without hanging.
  */
-class ImmediatelyClosingEventSource {
+class ImmediatelyClosingEventSource extends EventTarget {
     onmessage: ((event: { data: string }) => void) | null = null;
     onerror: (() => void) | null = null;
 
     constructor() {
+        super();
         queueMicrotask(() => this.onmessage?.({ data: 'DONE' }));
     }
 

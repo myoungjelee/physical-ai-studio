@@ -110,8 +110,7 @@ class ModelMetricsService:
                         "404",
                     }:
                         raise
-                    await asyncio.sleep(5)
-                    continue
+                    contents = ""
                 lines = contents.splitlines(keepends=True)
                 if lines and not lines[-1].endswith("\n"):
                     lines.pop()

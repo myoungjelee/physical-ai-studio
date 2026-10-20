@@ -21,11 +21,12 @@ import { ModelRow } from './model-row';
  * The stub resolves the stream immediately so the async iterator in
  * `fetchSSE` terminates without hanging the test.
  */
-class ImmediatelyClosingEventSource {
+class ImmediatelyClosingEventSource extends EventTarget {
     onmessage: ((event: { data: string }) => void) | null = null;
     onerror: (() => void) | null = null;
 
     constructor() {
+        super();
         queueMicrotask(() => this.onmessage?.({ data: 'DONE' }));
     }
 

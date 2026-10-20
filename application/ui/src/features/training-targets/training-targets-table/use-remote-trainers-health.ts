@@ -4,7 +4,7 @@ import { useQueries } from '@tanstack/react-query';
 
 import { $api } from '../../../api/client';
 import { SchemaRemoteTrainerHealth } from '../../../api/openapi-spec';
-import { clearAwsAuthentication, notifyAwsAuthentication } from '../training-target-form/aws-error-alert';
+import { observeAwsTrainerAuthentication } from '../training-target-form/aws-error-alert';
 
 const REMOTE_UNAVAILABLE_POLL_MS = 15000;
 const REMOTE_STARTING_POLL_MS = 5000;
@@ -21,7 +21,7 @@ type RemoteTrainerHealthEntry = {
  * `useRemoteTrainerHealth` (identical query key), and retries unreachable trainers until they recover.
  */
 export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string, RemoteTrainerHealthEntry> => {
-    const affected = useRef(new Map<string, string>());
+    const observers = useRef(new Map<string, ReturnType<typeof observeAwsTrainerAuthentication>>());
     const queries = useQueries({
         queries: remoteTrainerIds.map((remoteTrainerId) =>
             $api.queryOptions(
@@ -42,18 +42,30 @@ export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string,
         ),
     });
     useEffect(() => {
+        const active = new Set(remoteTrainerIds);
+        for (const [id, observer] of observers.current) {
+            if (!active.has(id)) {
+                observer.unsubscribe();
+                observers.current.delete(id);
+            }
+        }
         queries.forEach((query, index) => {
             const id = remoteTrainerIds[index];
-            const issue = query.data?.authentication_issue;
-            if (issue) {
-                affected.current.set(id, issue.profile_name);
-                notifyAwsAuthentication(issue);
-            } else if (query.data?.status === 'healthy' && affected.current.has(id)) {
-                clearAwsAuthentication(affected.current.get(id)!);
-                affected.current.delete(id);
+            let observer = observers.current.get(id);
+            if (!observer) {
+                observer = observeAwsTrainerAuthentication(id);
+                observers.current.set(id, observer);
             }
+            observer.update(query.data);
         });
     }, [queries, remoteTrainerIds]);
+    useEffect(() => {
+        const subscriptions = observers.current;
+        return () => {
+            for (const observer of subscriptions.values()) observer.unsubscribe();
+            subscriptions.clear();
+        };
+    }, []);
 
     return new Map(
         remoteTrainerIds.map((remoteTrainerId, index) => {
