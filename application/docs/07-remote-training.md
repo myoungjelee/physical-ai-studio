@@ -81,9 +81,15 @@ Open the completed stack's **Outputs** tab, then return to the **Add training ta
 
 Studio automatically assigns an available local loopback port for each SSH trainer. After adding the trainer, return to [Training Policies](./06-training-policies.md) to create and start a model training job.
 
+### Remove an EC2 trainer
+
+The EC2 instance keeps running after training finishes. Delete its CloudFormation stack when you finish using the trainer to terminate the instance and stop its compute charges. Removing the trainer from Studio only deletes its registration; the AWS resources remain deployed.
+
 ## AWS Batch provider
 
 The **AWS Provider** training target submits one-off training jobs to AWS Batch. Studio supports one AWS provider with the fixed name **AWS Provider**. Studio uses the selected named AWS profile on its backend host to assume the configured Studio role.
+
+The supplied stack scales compute to zero when idle. Keep it deployed for future training jobs; storage charges still apply.
 
 1. Open **Settings**, then **Training Targets**, and select **AWS Provider**.
 2. In **Deploy and configure AWS stack**, deploy the linked CloudFormation stack in **US East (N. Virginia)** (`us-east-1`), or use an existing deployment. Wait for stack creation to complete and copy `ConfigurationUri` from its **Outputs** tab.
@@ -157,7 +163,3 @@ Studio uploads the dataset snapshot and training specification to S3, submits a 
 Container stdout and stderr are collected in CloudWatch Logs and relayed into Studio's job logs. Live metric snapshots are published to S3 and streamed through Studio's metrics endpoint. Existing deployments need a CloudFormation stack update to grant the Studio role `logs:GetLogEvents` on the trainer log group, and a rebuilt trainer image to publish live metrics. A job remains running while AWS Batch reports it running, unless the trainer explicitly reports failure; a traceback alone does not imply that the container exited.
 
 Studio refreshes the Batch lifecycle message every five seconds, including elapsed time, scheduling reasons, and the age of the latest trainer report. Batch-level training updates without a message display **Training model** rather than retaining an earlier **Dataset ready** message. During startup, ECS task diagnostics distinguish image pulling from container setup when AWS reports those timestamps; update existing stacks to grant the Studio role `ecs:DescribeTasks` for this detail. Without that permission, Studio still reports the Batch state. AWS does not expose an image download percentage.
-
-## Remove an AWS trainer
-
-Delete the CloudFormation stack when training is complete. Removing the trainer from Studio does not delete the AWS resources or stop AWS charges.
