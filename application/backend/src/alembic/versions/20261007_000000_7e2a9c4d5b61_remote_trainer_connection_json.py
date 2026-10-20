@@ -36,7 +36,7 @@ def _connection_json(row: sa.Row) -> str:
             "ssh_host_alias": row.ssh_host_alias,
             "ssh_connection": None,
             "ssh_remote_port": row.ssh_remote_port or 8001,
-            "ssh_local_port": row.ssh_local_port or 8001,
+            "ssh_local_port": row.ssh_local_port,
         }
         if row.ssh_host_alias is None:
             connection["ssh_connection"] = {

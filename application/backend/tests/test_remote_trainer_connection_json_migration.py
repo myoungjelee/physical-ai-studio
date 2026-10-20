@@ -3,6 +3,10 @@
 import json
 import sqlite3
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+from alembic.script import ScriptDirectory
 
 from alembic import command
 from db.migration import MigrationManager
@@ -10,6 +14,31 @@ from settings import Settings
 
 _PRE_MIGRATION_REVISION = "7c1a9e2b4d6f"
 _MIGRATION_REVISION = "7e2a9c4d5b61"
+
+
+@pytest.mark.parametrize("local_port", [None, 9001])
+@pytest.mark.parametrize("remote_port", [None, 8002])
+@pytest.mark.parametrize("host_alias", [None, "gpu-box"])
+def test_connection_json_preserves_local_port(
+    tmp_path: Path, local_port: int | None, remote_port: int | None, host_alias: str | None
+) -> None:
+    config = MigrationManager(Settings(STORAGE_DIR=tmp_path)).get_alembic_config()
+    migration = ScriptDirectory.from_config(config).get_revision(_MIGRATION_REVISION).module
+    row = Mock(
+        connection_mode="ssh",
+        ssh_host_alias=host_alias,
+        ssh_hostname="gpu.example.test",
+        ssh_port=22,
+        ssh_username="trainer",
+        ssh_identity_file="~/.ssh/t",
+        ssh_local_port=local_port,
+        ssh_remote_port=remote_port,
+    )
+
+    connection = json.loads(migration._connection_json(row))
+
+    assert connection["ssh_local_port"] == local_port
+    assert connection["ssh_remote_port"] == (remote_port or 8001)
 
 
 def _upgrade_to_pre_migration(tmp_path: Path):

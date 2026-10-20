@@ -86,11 +86,17 @@ def test_authentication_updates_preserve_persisted_cancellation_and_remote_ident
             progress = await service.update_job_status(job.id, status="running", progress=50)
             assert progress.payload.cancel_requested is True
             assert progress.payload.authentication_issue == issue
-            restored = await service.update_remote_job_state(job.id)
+            new_snapshot_id = uuid4()
+            updated = await service.update_remote_job_state(job.id, snapshot_id=new_snapshot_id)
+            assert updated.payload.snapshot_id == new_snapshot_id
+            assert updated.payload.authentication_issue == issue
+            unchanged = await service.update_remote_job_state(job.id)
+            assert unchanged.payload.authentication_issue == issue
+            restored = await service.update_remote_job_state(job.id, authentication_issue=None)
             assert restored.payload.authentication_issue is None
             assert restored.payload.cancel_requested is True
             assert restored.payload.remote_job_id == remote_id
-            assert restored.payload.snapshot_id == snapshot_id
+            assert restored.payload.snapshot_id == new_snapshot_id
         await engine.dispose()
 
     asyncio.run(check())

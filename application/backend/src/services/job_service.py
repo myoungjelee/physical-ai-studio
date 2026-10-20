@@ -1,5 +1,6 @@
 import datetime
 import json
+from enum import Enum, auto
 from uuid import UUID
 
 from sqlalchemy import func, update
@@ -15,6 +16,10 @@ from schemas.base_job import JobStatus, JobType
 from schemas.job import JobPayload, RemoteTrainJobPayload, TrainJob, TrainJobPayload
 from services.remote_trainer_service import RemoteTrainerService
 from services.training_targets import get_training_target_handler
+
+
+class _Unset(Enum):
+    VALUE = auto()
 
 
 class JobService:
@@ -73,7 +78,7 @@ class JobService:
         self,
         job_id: UUID,
         *,
-        authentication_issue: AwsAuthenticationIssue | None = None,
+        authentication_issue: AwsAuthenticationIssue | _Unset | None = _Unset.VALUE,
         cancel_requested: bool | None = None,
         remote_job_id: UUID | None = None,
         snapshot_id: UUID | None = None,
@@ -83,7 +88,7 @@ class JobService:
         if not isinstance(job.payload, RemoteTrainJobPayload):
             raise ValueError("Remote state requires a remote training job")
         values: list = []
-        if authentication_issue is not None or (cancel_requested is None and remote_job_id is None):
+        if authentication_issue is not _Unset.VALUE:
             values.extend(
                 [
                     "$.authentication_issue",
@@ -96,6 +101,8 @@ class JobService:
             values.extend(["$.remote_job_id", str(remote_job_id)])
         if snapshot_id is not None:
             values.extend(["$.snapshot_id", str(snapshot_id)])
+        if not values:
+            return job
         await self.session.execute(
             update(JobDB).where(JobDB.id == str(job_id)).values(payload=func.json_set(JobDB.payload, *values)),
             execution_options={"synchronize_session": False},
