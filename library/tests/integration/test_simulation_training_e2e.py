@@ -33,13 +33,13 @@ from physicalai.inference import InferenceModel
 from physicalai.policies import get_physicalai_policy_class, get_policy
 from physicalai.train import Trainer
 from tests.integration.simulation_e2e import (
-    DATASET_REVISION,
     POLICIES,
     SEEDS,
     EpisodeMonitor,
     attest_runtime,
     checkpoint_entry,
     command,
+    dataset_entry,
     health,
     prepare_episode,
     score,
@@ -62,7 +62,7 @@ def _policy_options(name: str) -> dict:
 
 
 def _train(name: str, dataset: Path, output: Path, mode: str) -> tuple[object, dict]:
-    data = LeRobotDataModule(repo_id="sim-e2e", root=dataset, train_batch_size=2, num_workers=0)
+    data = LeRobotDataModule(repo_id=dataset_entry()["repo_id"], root=dataset, train_batch_size=2, num_workers=0)
     policy = get_policy(name, source="physicalai", **_policy_options(name))
     trainer = Trainer(
         default_root_dir=output,
@@ -189,8 +189,10 @@ def test_train_export_and_run_in_simulation(scene: str, tmp_path: Path) -> None:
         raise ValueError("Unknown E2E policy or mode")
     output = Path(os.environ.get("SIM_E2E_OUTPUT_DIR", str(tmp_path)))
     output.mkdir(parents=True, exist_ok=True)
+    recording_entry = dataset_entry()
     provenance = {"policy": name, "scene": scene, "mode": mode, "source_sha": os.environ.get("GITHUB_SHA"),
-                  "dataset_revision": DATASET_REVISION, "runtime_commits": attest_runtime()}
+                  "dataset_repo_id": recording_entry["repo_id"], "dataset_revision": recording_entry["revision"],
+                  "runtime_commits": attest_runtime()}
     entry = None
     if mode == "evaluate":
         manifest = Path(os.environ.get("SIM_E2E_CHECKPOINT_MANIFEST", "configs/simulation-e2e/checkpoints.json"))
@@ -210,6 +212,9 @@ def test_train_export_and_run_in_simulation(scene: str, tmp_path: Path) -> None:
         dataset = Path(os.environ["SIM_E2E_DATASET_DIR"])
         recording = json.loads((dataset / "simulation.json").read_text())
         assert recording["scene"] == scene and recording["belt_speed"] == 0.04
+        metadata = json.loads((dataset / "meta/info.json").read_text())
+        if metadata["total_episodes"] != recording_entry["episodes"]:
+            raise ValueError("Recording episode count does not match selected dataset")
         policy, training = _train(name, dataset, output, mode)
         provenance.update(training)
         (output / "training.json").write_text(json.dumps({**provenance, "status": "passed"}))
@@ -218,6 +223,8 @@ def test_train_export_and_run_in_simulation(scene: str, tmp_path: Path) -> None:
 
     dataset = Path(os.environ["SIM_E2E_DATASET_DIR"])
     metadata = json.loads((dataset / "meta/info.json").read_text())
+    if metadata["total_episodes"] != recording_entry["episodes"]:
+        raise ValueError("Recording episode count does not match selected dataset")
     assert metadata["features"]["action"]["shape"] == [6]
     assert metadata["features"]["observation.state"]["shape"] == [6]
     export = output / "export"

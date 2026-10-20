@@ -19,7 +19,17 @@ runs:
       shell: bash
       working-directory: library
       run: |
-        uv run --no-sync hf download Albertvh97/conveyor-sort-sim-demos --repo-type dataset \
-          --revision 6a949360761fee17089fbaaf8bc53f59715cb575 --local-dir "$SIM_E2E_DATASET_DIR" \
-          --include 'simulation.json' --include 'meta/*' --include 'data/*' --include 'videos/*'
-        test -f "$SIM_E2E_DATASET_DIR/meta/info.json"
+        uv run --no-sync python - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+        from huggingface_hub import snapshot_download
+        from tests.integration.simulation_e2e import dataset_entry
+        entry = dataset_entry()
+        root = Path(os.environ['SIM_E2E_DATASET_DIR'])
+        snapshot_download(entry['repo_id'], repo_type='dataset', revision=entry['revision'], local_dir=root,
+                          allow_patterns=['simulation.json', 'meta/*', 'data/*', 'videos/*'])
+        metadata = json.loads((root / 'meta/info.json').read_text())
+        if metadata['total_episodes'] != entry['episodes']:
+            raise ValueError('Recording episode count does not match selected dataset')
+        PY

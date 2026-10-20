@@ -8,6 +8,12 @@ on:
         type: choice
         options: [act, molmoact2, pi05, rldx1, smolvla, xr0]
         required: true
+      dataset:
+        description: Conveyor recording size (episodes)
+        type: choice
+        options: ["50", "100"]
+        default: "50"
+        required: true
       resume_run_id:
         description: Optional completed run ID with a checkpoint artifact from this workflow
         type: string
@@ -29,7 +35,8 @@ jobs:
       SIM_E2E_POLICY: ${{ inputs.policy }}
       SIM_E2E_MODE: train
       SIM_E2E_TRAIN_STEPS: -1
-      SIM_E2E_DATASET_DIR: ${{ github.workspace }}/.simulation-dataset
+      SIM_E2E_DATASET: ${{ inputs.dataset || '50' }}
+      SIM_E2E_DATASET_DIR: ${{ github.workspace }}/.simulation-dataset-${{ inputs.dataset || '50' }}
       SIM_E2E_OUTPUT_DIR: ${{ github.workspace }}/.simulation-training
       CUDA_VISIBLE_DEVICES: ${{ vars.SIM_E2E_CUDA_VISIBLE_DEVICES || '0' }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -64,10 +71,14 @@ jobs:
           import json
           import os
           from pathlib import Path
+          from tests.integration.simulation_e2e import dataset_entry
           root = Path('../.simulation-resume')
           provenance = json.loads((root / 'provenance.json').read_text())
-          if provenance['policy'] != os.environ['SIM_E2E_POLICY'] or provenance['source_sha'] != os.environ['GITHUB_SHA']:
-              raise ValueError('Resume checkpoint must use the same policy and source revision')
+          entry = dataset_entry()
+          expected = {'policy': os.environ['SIM_E2E_POLICY'], 'source_sha': os.environ['GITHUB_SHA'],
+                      'dataset_repo_id': entry['repo_id'], 'dataset_revision': entry['revision']}
+          if any(provenance.get(key) != value for key, value in expected.items()):
+              raise ValueError('Resume checkpoint must use the same policy, source revision and dataset')
           checkpoint = (root / 'checkpoints/last.ckpt').resolve()
           if not checkpoint.is_file():
               raise FileNotFoundError('Resume artifact has no last.ckpt')
@@ -75,15 +86,18 @@ jobs:
               env.write(f'SIM_E2E_RESUME_CHECKPOINT={checkpoint}\n')
           PY
       - name: Record provenance before training
+        working-directory: library
         run: |
           mkdir -p "$SIM_E2E_OUTPUT_DIR"
-          python3 - <<'PY'
+          uv run --no-sync python - <<'PY'
           import json
           import os
           from pathlib import Path
+          from tests.integration.simulation_e2e import dataset_entry
+          entry = dataset_entry()
           Path(os.environ['SIM_E2E_OUTPUT_DIR'], 'provenance.json').write_text(json.dumps({
               'policy': os.environ['SIM_E2E_POLICY'], 'source_sha': os.environ['GITHUB_SHA'],
-              'dataset_revision': '6a949360761fee17089fbaaf8bc53f59715cb575', 'epochs': 3,
+              'dataset_repo_id': entry['repo_id'], 'dataset_revision': entry['revision'], 'epochs': 3,
           }))
           PY
       - name: Train with periodic resumable checkpoints

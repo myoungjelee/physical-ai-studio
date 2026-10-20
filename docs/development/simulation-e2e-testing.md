@@ -24,7 +24,16 @@ Both installed Runtime and MuJoCo plugin commits are checked against `91338224c6
 
 ## Reproducible episodes
 
-The recording is the 50-episode [conveyor dataset](https://huggingface.co/datasets/Albertvh97/conveyor-sort-sim-demos), pinned at `6a949360761fee17089fbaaf8bc53f59715cb575`. It contains 62,866 samples, overview/wrist cameras, six-dimensional state/actions, and a 0.04 m/s belt. Its recording seed was not captured, so the fixed evaluation seeds cannot be certified as unseen during collection.
+Both workflows offer a **dataset** dropdown on manual dispatch: `50` (the default) or `100`. Scheduled weekly runs keep the original `50` choice. Repository-reviewed IDs and immutable revisions live in `library/tests/integration/simulation_e2e.py`; downloads use separate directories for each choice.
+
+| Choice | Hugging Face dataset                                                                                  | Episodes / frames | Pinned revision                            |
+| ------ | ----------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------ |
+| `50`   | [Original recording](https://huggingface.co/datasets/Albertvh97/conveyor-sort-sim-demos)              | 50 / 62,866       | `6a949360761fee17089fbaaf8bc53f59715cb575` |
+| `100`  | [Expanded recording](https://huggingface.co/datasets/Albertvh97/conveyor-sort-sim-demos-100-episodes) | 100 / 132,547     | `17db8f758b32141d795a71a064cfa9f5c6341b5b` |
+
+Both contain overview/wrist cameras, six-dimensional state/actions, and a 0.04 m/s belt at 30 FPS. The expanded dataset preserves the original 50 episodes and adds 50 stock-expert episodes with seeds 40000–40049: 500 correct items, none wrong or missed, and all 24 shape/colour/damage combinations. It preserves the natural spawn distribution rather than equal bin counts. New videos use H.264 CRF 18; original videos are copied without re-encoding, so encoding differs between sources. The original recording seeds were not captured, so evaluation seeds cannot be certified as unseen across either dataset.
+
+Selection changes the recording used for training and the camera/action schema used during evaluation. It does not retrain or replace a qualified checkpoint, change evaluation seeds, or change the five-episode scoring protocol. Provenance records the selected repository and revision. Downloads and training reject a recording with the wrong episode count.
 
 Each trial pauses the conveyor during setup, fixes a seed, resets, verifies queued commands have taken effect, connects the policy runtime, then resumes the belt. Do not disable episode auto-reset during scoring: in this simulator that also pauses the belt. Scoring stops on the first completed episode and validates all 10 items as correct/wrong/missed. The score is `correct / (correct + wrong + missed)`.
 
@@ -63,13 +72,13 @@ Each entry has exactly these fields (placeholders below must be replaced):
 
 ## Long training and resuming
 
-`.github/workflows/simulation-library-training.yml` is manual-only, separate from the weekly gate. Select one policy to train three full epochs (94,299 optimizer steps at batch size 2). It saves `last.ckpt` every 1,000 steps and explicitly saves the exact final training state after a successful fit. A five-day self-hosted timeout still applies. Long and weekly workflows share a concurrency group to avoid competing on the same GPU.
+`.github/workflows/simulation-library-training.yml` is manual-only, separate from the weekly gate. Select a policy and dataset to train three full epochs (94,299 optimizer steps for the original 50-episode dataset at batch size 2; the expanded dataset takes more steps). It saves `last.ckpt` every 1,000 steps and explicitly saves the exact final training state after a successful fit. A five-day self-hosted timeout still applies. Long and weekly workflows share a concurrency group to avoid competing on the same GPU.
 
-To resume, dispatch the same source revision and policy with `resume_run_id` pointing to a completed run of the training workflow. It verifies recorded policy/source identity and restores optimizer and scheduler state from the checkpoint. Checkpoint artifacts are large and expire after seven days; publish valuable candidates before expiry. These artifacts are not automatically promoted to weekly baselines.
+To resume, dispatch the same source revision, policy, and dataset with `resume_run_id` pointing to a completed run of the training workflow. It verifies recorded policy/source identity and the dataset repository/revision, then restores optimizer and scheduler state from the checkpoint. Artifacts missing dataset identity are rejected. Checkpoint artifacts are large and expire after seven days; publish valuable candidates before expiry. These artifacts are not automatically promoted to weekly baselines.
 
 ## Local commands
 
-From `library/`, install the `tests`, `policies`, `sim-e2e`, and appropriate hardware extras, then set `SIM_E2E_DATASET_DIR`, `SIM_E2E_POLICY`, and `SIM_E2E_OUTPUT_DIR`:
+From `library/`, install the `tests`, `policies`, `sim-e2e`, and appropriate hardware extras, then set `SIM_E2E_DATASET_DIR`, `SIM_E2E_POLICY`, and `SIM_E2E_OUTPUT_DIR`. Set `SIM_E2E_DATASET=50` (default) or `SIM_E2E_DATASET=100` to match the pinned recording in that directory:
 
 ```bash
 # Bounded training regression, no simulator required

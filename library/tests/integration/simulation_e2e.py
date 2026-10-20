@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -18,8 +19,21 @@ import numpy as np
 
 POLICIES = ("act", "molmoact2", "pi05", "rldx1", "smolvla", "xr0")
 RUNTIME_REVISION = "91338224c67f0d17f166eb062e3ac9a6762db784"
-DATASET_REVISION = "6a949360761fee17089fbaaf8bc53f59715cb575"
+DATASETS = {
+    "50": {"repo_id": "Albertvh97/conveyor-sort-sim-demos",
+           "revision": "6a949360761fee17089fbaaf8bc53f59715cb575", "episodes": 50},
+    "100": {"repo_id": "Albertvh97/conveyor-sort-sim-demos-100-episodes",
+            "revision": "17db8f758b32141d795a71a064cfa9f5c6341b5b", "episodes": 100},
+}
 SEEDS = (104729, 104743, 104759, 104761, 104773)
+
+
+def dataset_entry() -> dict:
+    """Select a repository-reviewed recording, defaulting to the original 50 episodes."""
+    choice = os.environ.get("SIM_E2E_DATASET", "50")
+    if choice not in DATASETS:
+        raise ValueError(f"Unknown simulation dataset: {choice!r}; choose 50 or 100")
+    return DATASETS[choice]
 
 
 def health(url: str) -> dict:

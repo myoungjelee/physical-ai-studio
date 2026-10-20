@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: "0 19 * * 5"
   workflow_dispatch:
+    inputs:
+      dataset:
+        description: Conveyor recording size (episodes)
+        type: choice
+        options: ["50", "100"]
+        default: "50"
+        required: true
 
 permissions: {}
 concurrency:
@@ -17,7 +24,8 @@ env:
   MUJOCO_EGL_DEVICE_ID: ${{ vars.SIM_E2E_CUDA_VISIBLE_DEVICES || '0' }}
   SIM_E2E_HTTP_URL: http://127.0.0.1:8080
   SIM_E2E_OWNER: sim-weekly-${{ github.run_id }}-${{ github.run_attempt }}
-  SIM_E2E_DATASET_DIR: ${{ github.workspace }}/.simulation-dataset
+  SIM_E2E_DATASET: ${{ inputs.dataset || '50' }}
+  SIM_E2E_DATASET_DIR: ${{ github.workspace }}/.simulation-dataset-${{ inputs.dataset || '50' }}
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
 jobs:

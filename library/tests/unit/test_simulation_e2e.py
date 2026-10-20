@@ -6,7 +6,9 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
+import sys
 import threading
 import tomllib
 from pathlib import Path
@@ -125,9 +127,11 @@ def test_checkpoint_checksum(tmp_path):
         controls.verify_checkpoint(checkpoint, "b" * 64)
 
 
+@pytest.mark.parametrize("dataset", ["50", "100"])
 @pytest.mark.parametrize("policy", controls.POLICIES)
 @pytest.mark.parametrize("mode,steps", [("train", None), ("train", "-1"), ("full", None)])
-def test_training_budget_and_reload(tmp_path, monkeypatch, policy, mode, steps):
+def test_training_budget_and_reload(tmp_path, monkeypatch, policy, mode, steps, dataset):
+    monkeypatch.setenv("SIM_E2E_DATASET", dataset)
     monkeypatch.delenv("SIM_E2E_RESUME_CHECKPOINT", raising=False)
     monkeypatch.delenv("SIM_E2E_TRAIN_STEPS", raising=False)
     if steps is not None:
@@ -137,7 +141,8 @@ def test_training_budget_and_reload(tmp_path, monkeypatch, policy, mode, steps):
     monkeypatch.setattr(suite, "get_policy", make_policy)
     make_class = MagicMock()
     monkeypatch.setattr(suite, "get_physicalai_policy_class", make_class)
-    monkeypatch.setattr(suite, "LeRobotDataModule", MagicMock())
+    make_data = MagicMock()
+    monkeypatch.setattr(suite, "LeRobotDataModule", make_data)
     trainer = MagicMock(global_step=20, callback_metrics={"train/loss": 0.2})
 
     def fit(*args, **kwargs):
@@ -152,6 +157,8 @@ def test_training_budget_and_reload(tmp_path, monkeypatch, policy, mode, steps):
     assert make_trainer.call_args.kwargs["max_epochs"] == 3
     assert make_trainer.call_args.kwargs["max_steps"] == (int(steps) if steps else (20 if mode == "train" else -1))
     assert result["checkpoint_reload"] == "passed"
+    make_data.assert_called_once_with(repo_id=controls.DATASETS[dataset]["repo_id"], root=tmp_path,
+                                     train_batch_size=2, num_workers=0)
     trainer.save_checkpoint.assert_called_once_with(tmp_path / "checkpoints/last.ckpt")
     make_class.return_value.load_from_checkpoint.assert_called_once_with(
         tmp_path / "checkpoints/last.ckpt", map_location="cpu", weights_only=True)
@@ -163,12 +170,14 @@ def test_training_budget_and_reload(tmp_path, monkeypatch, policy, mode, steps):
         make_policy.assert_called_once_with(policy, source="physicalai")
 
 
+@pytest.mark.parametrize("dataset", ["50", "100"])
 @pytest.mark.parametrize("timing_ok,quality_ok", [(True, True), (False, True), (True, False)])
-def test_evaluation_reports_quality_and_timing_separately(tmp_path, monkeypatch, timing_ok, quality_ok):
+def test_evaluation_reports_quality_and_timing_separately(tmp_path, monkeypatch, timing_ok, quality_ok, dataset):
+    monkeypatch.setenv("SIM_E2E_DATASET", dataset)
     entry = {"repo_id": "org/model", "revision": "a" * 40, "filename": "model.ckpt",
              "sha256": "b" * 64, "min_score": 0.5}
     (tmp_path / "meta").mkdir()
-    (tmp_path / "meta/info.json").write_text(json.dumps({"fps": 30, "features": {
+    (tmp_path / "meta/info.json").write_text(json.dumps({"fps": 30, "total_episodes": int(dataset), "features": {
         "action": {"shape": [6]}, "observation.state": {"shape": [6]}}}))
     monkeypatch.setenv("SIM_E2E_MODE", "evaluate")
     monkeypatch.setenv("SIM_E2E_POLICY", "act")
@@ -203,6 +212,8 @@ def test_evaluation_reports_quality_and_timing_separately(tmp_path, monkeypatch,
     assert result["quality"] == ("passed" if quality_ok else "failed")
     assert result["timing"] == ("passed" if timing_ok else "failed")
     assert result["wiring"] == "passed"
+    assert result["dataset_repo_id"] == controls.DATASETS[dataset]["repo_id"]
+    assert result["dataset_revision"] == controls.DATASETS[dataset]["revision"]
 
 
 def test_weekly_report_does_not_promote_missing_or_zero_scores(tmp_path):
@@ -352,3 +363,109 @@ def test_runtime_attestation_rejects_mixed_pins(monkeypatch):
     monkeypatch.setattr(controls, "distribution", lambda name: dist)
     with pytest.raises(RuntimeError, match="pinned Runtime"):
         controls.attest_runtime()
+
+
+@pytest.mark.parametrize("choice", [None, "50", "100"])
+def test_dataset_selection_is_pinned(monkeypatch, choice):
+    monkeypatch.delenv("SIM_E2E_DATASET", raising=False)
+    if choice is not None:
+        monkeypatch.setenv("SIM_E2E_DATASET", choice)
+    entry = controls.dataset_entry()
+    assert entry["episodes"] == int(choice or "50")
+    assert re.fullmatch(r"[0-9a-f]{40}", entry["revision"])
+    assert entry["repo_id"] == ("Albertvh97/conveyor-sort-sim-demos" + ("-100-episodes" if choice == "100" else ""))
+
+
+@pytest.mark.parametrize("choice", ["", "51", "../100", "100; echo unexpected"])
+def test_unknown_dataset_is_rejected(monkeypatch, choice):
+    monkeypatch.setenv("SIM_E2E_DATASET", choice)
+    with pytest.raises(ValueError, match="Unknown simulation dataset"):
+        controls.dataset_entry()
+
+
+@pytest.mark.parametrize("dataset", ["50", "100"])
+def test_training_rejects_the_wrong_recording_before_fit(tmp_path, monkeypatch, dataset):
+    monkeypatch.setenv("SIM_E2E_DATASET", dataset)
+    monkeypatch.setenv("SIM_E2E_MODE", "train")
+    monkeypatch.setenv("SIM_E2E_DATASET_DIR", str(tmp_path))
+    monkeypatch.setenv("SIM_E2E_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(suite, "attest_runtime", lambda: {})
+    train = MagicMock()
+    monkeypatch.setattr(suite, "_train", train)
+    (tmp_path / "simulation.json").write_text(json.dumps({"scene": "conveyor_sort", "belt_speed": 0.04}))
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta/info.json").write_text(json.dumps({"total_episodes": 100 if dataset == "50" else 50}))
+    with pytest.raises(ValueError, match="episode count"):
+        suite.test_train_export_and_run_in_simulation("conveyor_sort", tmp_path)
+    train.assert_not_called()
+
+
+@pytest.mark.parametrize("name", ["simulation-library-e2e", "simulation-library-training"])
+def test_workflows_offer_both_recordings_with_separate_download_directories(name):
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.load((root / f".github/workflows/{name}.yml").read_text(), Loader=yaml.BaseLoader)
+    choice = workflow["on"]["workflow_dispatch"]["inputs"]["dataset"]
+    assert choice["type"] == "choice" and choice["default"] == "50"
+    assert set(choice["options"]) == set(controls.DATASETS)
+    env = workflow["env"] if "env" in workflow else workflow["jobs"]["train"]["env"]
+    assert env["SIM_E2E_DATASET"] == "${{ inputs.dataset || '50' }}"
+    assert env["SIM_E2E_DATASET_DIR"].endswith(".simulation-dataset-${{ inputs.dataset || '50' }}")
+
+
+def _workflow_python(path: Path, step: str, composite: bool = False) -> str:
+    workflow = yaml.safe_load(path.read_text())
+    steps = workflow["runs"]["steps"] if composite else workflow["jobs"]["train"]["steps"]
+    script = next(item["run"] for item in steps if item.get("name") == step)
+    return script.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+
+
+@pytest.mark.parametrize("dataset", ["50", "100"])
+def test_workflow_download_uses_selected_pins(tmp_path, dataset):
+    library = Path(__file__).resolve().parents[2]
+    action = library.parent / ".github/actions/simulation-environment/action.yml"
+    script = tmp_path / "download.py"
+    script.write_text(_workflow_python(action, "Fetch pinned recording", composite=True))
+    # Stub only the network operation; execute the actual repository-owned workflow Python.
+    (tmp_path / "huggingface_hub.py").write_text(
+        'import json\ndef snapshot_download(repo_id, **kwargs):\n'
+        '    print(json.dumps({"repo_id": repo_id, **kwargs}, default=str))\n')
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta/info.json").write_text(json.dumps({"total_episodes": int(dataset)}))
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True,
+        env={**os.environ, "PYTHONPATH": str(library), "SIM_E2E_DATASET": dataset,
+             "SIM_E2E_DATASET_DIR": str(tmp_path)})
+    fetched = json.loads(result.stdout)
+    assert fetched["repo_id"] == controls.DATASETS[dataset]["repo_id"]
+    assert fetched["revision"] == controls.DATASETS[dataset]["revision"]
+    assert fetched["repo_type"] == "dataset"
+    assert fetched["allow_patterns"] == ["simulation.json", "meta/*", "data/*", "videos/*"]
+
+
+@pytest.mark.parametrize("mismatch", [None, "policy", "source_sha", "dataset_repo_id", "dataset_revision"])
+def test_workflow_resume_requires_matching_dataset_and_source(tmp_path, mismatch):
+    library = Path(__file__).resolve().parents[2]
+    workflow = library.parent / ".github/workflows/simulation-library-training.yml"
+    script = tmp_path / "resume.py"
+    script.write_text(_workflow_python(workflow, "Resume only a matching recorded training job"))
+    workdir = tmp_path / "library"
+    workdir.mkdir()
+    resume = tmp_path / ".simulation-resume"
+    (resume / "checkpoints").mkdir(parents=True)
+    checkpoint = resume / "checkpoints/last.ckpt"
+    checkpoint.touch()
+    entry = controls.DATASETS["100"]
+    provenance = {"policy": "act", "source_sha": "a" * 40,
+                  "dataset_repo_id": entry["repo_id"], "dataset_revision": entry["revision"]}
+    if mismatch is not None:
+        provenance[mismatch] = "wrong"
+    (resume / "provenance.json").write_text(json.dumps(provenance))
+    envfile = tmp_path / "env"
+    result = subprocess.run([sys.executable, str(script)], cwd=workdir, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(library), "SIM_E2E_DATASET": "100", "SIM_E2E_POLICY": "act",
+             "GITHUB_SHA": "a" * 40, "GITHUB_ENV": str(envfile)})
+    if mismatch is None:
+        assert result.returncode == 0, result.stderr
+        assert envfile.read_text() == f"SIM_E2E_RESUME_CHECKPOINT={checkpoint}\n"
+    else:
+        assert result.returncode != 0 and "same policy, source revision and dataset" in result.stderr
+        assert not envfile.exists()
