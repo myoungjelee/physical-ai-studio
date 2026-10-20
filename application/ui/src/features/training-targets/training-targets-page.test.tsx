@@ -368,6 +368,52 @@ describe('TrainingTargetsPage', () => {
         expect(forgetLocally).toEqual(['true']);
     });
 
+    it('clears an expired AWS target warning only after deletion succeeds', async () => {
+        const user = userEvent.setup();
+        const close = rs.fn();
+        rs.mocked(toast.negative).mockReturnValue(close);
+        let trainers = [awsTrainer];
+        let failDeletion = true;
+        server.use(
+            http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json(trainers)),
+            http.get(REMOTE_TRAINER_HEALTH_PATH, () =>
+                HttpResponse.json({
+                    ...healthyTrainer,
+                    remote_trainer_id: awsTrainer.id,
+                    status: 'unreachable',
+                    authentication_issue: {
+                        profile_name: 'deleted-target-studio',
+                        code: 'aws_credentials_expired',
+                        title: 'Session expired',
+                        detail: 'Renew deleted-target-studio.',
+                        command: 'aws sso login --profile=deleted-target-studio',
+                    },
+                })
+            ),
+            mswHttp.delete('http://localhost:7860/api/remote-trainers/:remote_trainer_id', () => {
+                if (failDeletion) return HttpResponse.json({ message: 'Deletion failed.' }, { status: 500 });
+                trainers = [];
+                return new HttpResponse(null, { status: 204 });
+            })
+        );
+
+        render(<TrainingTargetsPage />);
+        await waitFor(() =>
+            expect(toast.negative).toHaveBeenCalledWith('Renew deleted-target-studio.', expect.anything())
+        );
+        await user.click(await screen.findByRole('button', { name: `Remove ${awsTrainer.name}` }));
+        const dialog = await screen.findByRole('alertdialog', { name: 'Remove training target' });
+        const remove = within(dialog).getByRole('button', { name: 'Remove' });
+        await user.click(remove);
+        expect(await within(dialog).findByText('Deletion failed.')).toBeInTheDocument();
+        expect(close).not.toHaveBeenCalled();
+
+        failDeletion = false;
+        await user.click(remove);
+        await waitFor(() => expect(close).toHaveBeenCalledOnce());
+        expect(await screen.findByText('No training targets added')).toBeInTheDocument();
+    });
+
     it('deletes a configured remote trainer', async () => {
         const user = userEvent.setup();
         let trainers: (typeof remoteTrainer)[] = [remoteTrainer];

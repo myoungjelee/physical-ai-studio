@@ -5,6 +5,7 @@ import { AlertDialog, Checkbox, Flex, Text } from '@geti-ui/ui';
 import { $api } from '../../../api/client';
 import { getApiErrorMessage } from '../../../api/errors';
 import { SchemaRemoteTrainer } from '../../../api/openapi-spec';
+import { clearAwsTrainerAuthentication } from '../training-target-form/aws-error-alert';
 
 import classes from './remote-trainer-form/remote-trainer-form.module.css';
 
@@ -35,7 +36,10 @@ export const DeleteRemoteTrainerDialog = ({ remoteTrainer, onDeleted, onCancel }
                 },
             },
             {
-                onSuccess: onDeleted,
+                onSuccess: () => {
+                    clearAwsTrainerAuthentication(remoteTrainer.id);
+                    onDeleted();
+                },
             }
         );
     };

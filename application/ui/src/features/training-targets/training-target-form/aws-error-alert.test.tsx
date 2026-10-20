@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 
 import {
     clearAwsAuthentication,
+    clearAwsTrainerAuthentication,
     notifyAwsAuthentication,
     observeAwsTrainerAuthentication,
     showAwsError,
@@ -59,6 +60,75 @@ describe('AWS error toast', () => {
         notifyAwsAuthentication(issue);
         expect(negative).toHaveBeenCalledTimes(2);
         clearAwsAuthentication(issue.profile_name);
+    });
+
+    it('clears deleted trainers without retaining warnings or accepting late health updates', () => {
+        const close = rs.fn();
+        const negative = rs.spyOn(toast, 'negative').mockReturnValue(close);
+        const issue = {
+            profile_name: 'deleted-studio',
+            code: 'aws_credentials_expired',
+            title: 'Session expired',
+            detail: 'Renew deleted-studio.',
+            command: 'aws sso login --profile=deleted-studio',
+        };
+        const health = {
+            remote_trainer_id: 'deleted-trainer',
+            status: 'unreachable' as const,
+            checked_at: '2026-10-20T12:00:00Z',
+            devices: [],
+            authentication_issue: issue,
+        };
+        const observer = observeAwsTrainerAuthentication(health.remote_trainer_id);
+        observer.update(health);
+        clearAwsTrainerAuthentication(health.remote_trainer_id);
+        expect(close).toHaveBeenCalledOnce();
+
+        observer.update(health);
+        observer.unsubscribe();
+        expect(negative).toHaveBeenCalledOnce();
+
+        const replacement = observeAwsTrainerAuthentication('replacement-trainer');
+        replacement.update({ ...health, remote_trainer_id: 'replacement-trainer' });
+        expect(negative).toHaveBeenCalledTimes(2);
+        clearAwsTrainerAuthentication('replacement-trainer');
+        replacement.unsubscribe();
+        expect(close).toHaveBeenCalledTimes(2);
+    });
+
+    it('preserves other sources when deleting an unmounted trainer', () => {
+        const close = rs.fn();
+        const negative = rs.spyOn(toast, 'negative').mockReturnValue(close);
+        const issue = {
+            profile_name: 'shared-deletion-studio',
+            code: 'aws_credentials_expired',
+            title: 'Session expired',
+            detail: 'Renew shared-deletion-studio.',
+            command: 'aws sso login --profile=shared-deletion-studio',
+        };
+        const health = {
+            status: 'unreachable' as const,
+            checked_at: '2026-10-20T12:00:00Z',
+            devices: [],
+            authentication_issue: issue,
+        };
+        const first = observeAwsTrainerAuthentication('first-deleted-trainer');
+        const second = observeAwsTrainerAuthentication('second-deleted-trainer');
+        first.update({ ...health, remote_trainer_id: 'first-deleted-trainer' });
+        second.update({ ...health, remote_trainer_id: 'second-deleted-trainer' });
+        notifyAwsAuthentication(issue);
+        first.unsubscribe();
+        expect(close).not.toHaveBeenCalled();
+
+        clearAwsTrainerAuthentication('first-deleted-trainer');
+        expect(close).not.toHaveBeenCalled();
+        clearAwsTrainerAuthentication('second-deleted-trainer');
+        second.unsubscribe();
+        expect(close).not.toHaveBeenCalled();
+        expect(negative).toHaveBeenCalledOnce();
+
+        clearAwsAuthentication(issue.profile_name);
+        expect(close).toHaveBeenCalledOnce();
     });
 
     it('keeps trainer and non-health warnings independent for the same profile', () => {

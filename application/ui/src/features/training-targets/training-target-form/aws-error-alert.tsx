@@ -27,17 +27,25 @@ export const clearAwsAuthentication = (profileName: string, source = 'profile') 
     }
 };
 
+export const clearAwsTrainerAuthentication = (trainerId: string) => {
+    const state = trainerAuthentication.get(trainerId);
+    if (state?.profileName) clearAwsAuthentication(state.profileName, `trainer:${trainerId}`);
+    trainerAuthentication.delete(trainerId);
+};
+
 export const observeAwsTrainerAuthentication = (trainerId: string) => {
     const state = trainerAuthentication.get(trainerId) ?? { observers: 0 };
     trainerAuthentication.set(trainerId, state);
     state.observers++;
     const source = `trainer:${trainerId}`;
     const prune = () => {
-        if (state.observers === 0 && !state.profileName) trainerAuthentication.delete(trainerId);
+        if (trainerAuthentication.get(trainerId) === state && state.observers === 0 && !state.profileName) {
+            trainerAuthentication.delete(trainerId);
+        }
     };
     return {
         update: (health: SchemaRemoteTrainerHealth | undefined) => {
-            if (health?.remote_trainer_id !== trainerId) return;
+            if (trainerAuthentication.get(trainerId) !== state || health?.remote_trainer_id !== trainerId) return;
             const issue = health.authentication_issue;
             if (issue) {
                 if (state.profileName && state.profileName !== issue.profile_name) {
