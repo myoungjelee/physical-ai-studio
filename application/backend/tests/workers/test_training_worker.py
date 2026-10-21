@@ -17,6 +17,7 @@ from schemas.base_job import JobStatus, JobType
 from schemas.dataset import Snapshot
 from schemas.job import LocalTrainJobPayload, RemoteTrainJobPayload, TrainingPrecision, TrainJobPayload
 from schemas.model import Model
+from services.snapshot_service import SnapshotService
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -538,15 +539,19 @@ class TestAssignedJob:
             patch(f"{MODULE}.get_settings", return_value=settings),
             patch(f"{MODULE}.DatasetService") as dataset_service,
             patch(f"{MODULE}.SnapshotService") as snapshot_service,
+            patch("services.snapshot_service.time.strftime", return_value="snapshot_same_second"),
             patch.object(worker, "_train_model", AsyncMock()),
         ):
             dataset_service.return_value.get_dataset_by_id = AsyncMock(return_value=MagicMock())
-            snapshot_service.generate_snapshot_folder_name.return_value = "snapshot_same_second"
+            snapshot_service.generate_snapshot_folder_name.side_effect = SnapshotService.generate_snapshot_folder_name
             create_snapshot = AsyncMock(return_value=_make_snapshot(tmp_path))
             snapshot_service.return_value.create_snapshot_for_dataset = create_snapshot
             for job in jobs:
                 await worker._run_training_job(job, payload)
 
+        assert [call.args for call in snapshot_service.generate_snapshot_folder_name.call_args_list] == [
+            (job.id,) for job in jobs
+        ]
         destinations = [call.kwargs["destination"] for call in create_snapshot.await_args_list]
         assert destinations == [settings.snapshot_dir / f"snapshot_same_second_{job.id}" for job in jobs]
         assert len(set(destinations)) == 2
