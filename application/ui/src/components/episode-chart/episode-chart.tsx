@@ -5,12 +5,19 @@ import {
     Legend,
     Line,
     LineChart,
+    ReferenceArea,
     ReferenceLine,
     ResponsiveContainer,
     XAxis,
     YAxis,
     type MouseHandlerDataParam,
 } from 'recharts';
+
+import type { TrimRange } from '../../features/datasets/episodes/trim-range';
+
+export const CHART_MARGIN = { top: 20, right: 20, left: 20, bottom: 20 };
+export const Y_AXIS_WIDTH = 60;
+export const CHART_HEIGHT = 300;
 
 function buildChartData(actions: number[][], joints: string[], fps: number) {
     return actions.map((row, idx) => ({
@@ -47,9 +54,20 @@ interface EpisodeChartProps {
     play: () => void;
     pause: () => void;
     isPlaying: boolean;
+    trimRange?: TrimRange;
 }
 
-export default function EpisodeChart({ actions, joints, fps, time, seek, play, pause, isPlaying }: EpisodeChartProps) {
+export default function EpisodeChart({
+    actions,
+    joints,
+    fps,
+    time,
+    seek,
+    play,
+    pause,
+    isPlaying,
+    trimRange,
+}: EpisodeChartProps) {
     const [hoverPosition, setHoverPosition] = useState<number | undefined>(undefined);
     const [mouseDown, setMouseDown] = useState<boolean>(false);
     const posJoints = useMemo(() => joints.filter(isPosJoint), [joints]);
@@ -99,10 +117,10 @@ export default function EpisodeChart({ actions, joints, fps, time, seek, play, p
     }, [isPlaying, pause]);
 
     return (
-        <ResponsiveContainer width='100%' height={300} style={{ userSelect: 'none' }}>
+        <ResponsiveContainer width='100%' height={CHART_HEIGHT} style={{ userSelect: 'none' }}>
             <LineChart
                 data={chartData}
-                margin={{ top: 20, right: 20, left: 20, bottom: 20 }}
+                margin={CHART_MARGIN}
                 onMouseUp={handleMouseUp}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
@@ -112,11 +130,24 @@ export default function EpisodeChart({ actions, joints, fps, time, seek, play, p
                     dataKey='index'
                     label={{ value: 'Time (s)', position: 'insideBottomRight', offset: -10 }}
                     ticks={ticks}
+                    domain={[0, actions.length / fps]}
                     type='number'
                 />
-                <YAxis label={{ value: 'Value (deg)', angle: -90, position: 'insideLeft' }} />
+                <YAxis width={Y_AXIS_WIDTH} label={{ value: 'Value (deg)', angle: -90, position: 'insideLeft' }} />
 
-                <Legend verticalAlign='bottom' height={36} />
+                <Legend position='top' height={36} offset={10} />
+                {trimRange !== undefined && trimRange.start > 0 && (
+                    <ReferenceArea x1={0} x2={trimRange.start / fps} ifOverflow='hidden' fill='#000' stroke='none' />
+                )}
+                {trimRange !== undefined && trimRange.end < actions.length && (
+                    <ReferenceArea
+                        x1={trimRange.end / fps}
+                        x2={actions.length / fps}
+                        ifOverflow='hidden'
+                        fill='#000'
+                        stroke='none'
+                    />
+                )}
                 {hoverPosition !== undefined && (
                     <ReferenceLine x={hoverPosition} stroke='#5ac3f8' label='' strokeWidth={2} />
                 )}

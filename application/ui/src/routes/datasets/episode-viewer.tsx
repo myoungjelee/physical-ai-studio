@@ -11,6 +11,7 @@ import {
     useEpisodeViewer,
 } from '../../features/datasets/episodes/episode-viewer-provider.component';
 import { TrimEpisodeControls } from '../../features/datasets/episodes/trim-episode-controls';
+import { getFullTrimRange, TrimRange } from '../../features/datasets/episodes/trim-range';
 import { Player } from '../../features/datasets/episodes/use-player';
 import { RobotModelsProvider } from '../../features/robots/robot-models-context';
 import { TimelineControls } from './timeline-controls';
@@ -26,8 +27,10 @@ interface EpisodeViewerProps {
 interface LiveEpisodeChartProps {
     episode: SchemaEpisode;
     player: Player;
+    trimRange?: TrimRange;
 }
-const LiveEpisodeChart = ({ episode, player }: LiveEpisodeChartProps) => {
+
+const LiveEpisodeChart = ({ episode, player, trimRange }: LiveEpisodeChartProps) => {
     const [time, setTime] = useState<number>(player.timeRef.current);
 
     useEffect(() => {
@@ -55,7 +58,31 @@ const LiveEpisodeChart = ({ episode, player }: LiveEpisodeChartProps) => {
             isPlaying={player.isPlaying}
             play={player.play}
             pause={player.pause}
+            trimRange={trimRange}
         />
+    );
+};
+
+interface EpisodeTrimTimelineProps {
+    datasetId: string;
+    episode: SchemaEpisode;
+    player: Player;
+}
+
+const EpisodeTrimTimeline = ({ datasetId, episode, player }: EpisodeTrimTimelineProps) => {
+    const [range, setRange] = useState<TrimRange>(() => getFullTrimRange(episode.length));
+
+    return (
+        <>
+            <LiveEpisodeChart episode={episode} player={player} trimRange={range} />
+            <TrimEpisodeControls
+                datasetId={datasetId}
+                episode={episode}
+                player={player}
+                range={range}
+                onRangeChange={setRange}
+            />
+        </>
     );
 };
 
@@ -67,15 +94,14 @@ const EpisodeTimelineComponent = ({ datasetId }: { datasetId: string }) => {
             <Disclosure isQuiet>
                 <DisclosureTitle>Timeline</DisclosureTitle>
                 <DisclosurePanel>
-                    <LiveEpisodeChart episode={episode} player={player} />
+                    <EpisodeTrimTimeline
+                        key={`${episode.episode_index}-${episode.length}`}
+                        datasetId={datasetId}
+                        episode={episode}
+                        player={player}
+                    />
                 </DisclosurePanel>
             </Disclosure>
-            <TrimEpisodeControls
-                key={`${episode.episode_index}-${episode.length}`}
-                datasetId={datasetId}
-                episode={episode}
-                player={player}
-            />
             {/* We reset the time controls state for the new episode */}
             <TimelineControls key={episode.episode_index} player={player} />
         </div>
