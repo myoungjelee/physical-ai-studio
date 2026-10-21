@@ -10,7 +10,15 @@ import pytest
 from core.scheduler import Scheduler, _run_job
 from schemas.base_job import JobStatus, JobType
 from schemas.dataset_import_job import DatasetImportJobPayload, ImportStep
-from schemas.job import DatasetImportJob, LocalTrainJobPayload, RemoteTrainJobPayload, TrainingDevice, TrainJob
+from schemas.job import (
+    DatasetImportJob,
+    LocalTrainJobPayload,
+    OptimizeModelJob,
+    OptimizeModelJobPayload,
+    RemoteTrainJobPayload,
+    TrainingDevice,
+    TrainJob,
+)
 from services.event_processor import EventType
 from services.training_targets import target_key
 
@@ -61,6 +69,7 @@ def services():
         recover.return_value = []
         jobs = job_service.return_value
         jobs.get_pending_train_jobs = AsyncMock(return_value=[])
+        jobs.get_pending_jobs = AsyncMock(return_value=[])
         jobs.get_job_list = AsyncMock(return_value=[])
         jobs.get_jobs_by_ids = AsyncMock(return_value=[])
         jobs.update_job_status = AsyncMock()
@@ -259,7 +268,7 @@ async def test_failed_preparation_does_not_leave_training_pending(scheduler, ser
 async def test_process_start_failure_is_reaped(scheduler, services):
     jobs, _, _ = services
     job = _import_job()
-    jobs.get_job_list.return_value = [job]
+    jobs.get_job_list.side_effect = [[job], []]
     with patch(f"{MODULE}.mp.Process") as process:
         process.return_value.start.side_effect = OSError("cannot start")
         process.return_value.pid = None
@@ -293,7 +302,7 @@ async def test_recovery_excludes_live_jobs_and_fails_only_abandoned_imports(sche
     active_import, orphan_import = _import_job(), _import_job()
     process = MagicMock()
     scheduler.processes = {"local": (process, training), "dataset_import": (process, active_import)}
-    jobs.get_job_list.return_value = [active_import, orphan_import]
+    jobs.get_job_list.side_effect = [[active_import, orphan_import], []]
     await scheduler._recover_jobs()
     assert recover.await_args.kwargs["exclude_job_ids"] == frozenset({training.id, active_import.id})
     jobs.update_job_status.assert_awaited_once_with(
@@ -349,3 +358,95 @@ def test_training_target_keys_still_use_shared_registry(job):
         "local" if isinstance(job.payload, LocalTrainJobPayload) else f"remote:{job.payload.remote_trainer_id}:cuda:1"
     )
     assert target_key(job.payload) == expected
+
+
+def _optimization_job():
+    return OptimizeModelJob(project_id=uuid4(), payload=OptimizeModelJobPayload(model_id=uuid4()))
+
+
+@pytest.mark.anyio
+async def test_optimization_shares_local_slot_and_gets_its_own_cancellation_event(scheduler, services):
+    jobs, _, _ = services
+    optimization = _optimization_job()
+    jobs.get_pending_jobs.return_value = [optimization, _optimization_job()]
+    with patch(f"{MODULE}.mp.Process") as process:
+        await scheduler._schedule_jobs()
+        await scheduler._schedule_jobs()
+        process.assert_called_once()
+        args = process.call_args.kwargs["args"]
+        assert args[:2] == (JobType.OPTIMIZE_MODEL, optimization.id)
+        assert args[3] is scheduler._cancel_events[optimization.id]
+        scheduler.cancel_job(optimization.id)
+        assert args[3].is_set()
+        jobs.get_pending_train_jobs.return_value = [_training_job()]
+        await scheduler._schedule_jobs()
+        process.assert_called_once()
+        scheduler._shutdown_processes()
+
+
+@pytest.mark.anyio
+async def test_local_training_blocks_optimization_but_remote_training_does_not(scheduler, services):
+    jobs, _, _ = services
+    optimization = _optimization_job()
+    jobs.get_pending_jobs.return_value = [optimization]
+    jobs.get_pending_train_jobs.return_value = [_training_job()]
+    with patch(f"{MODULE}.mp.Process") as process:
+        await scheduler._schedule_jobs()
+        process.assert_called_once()
+        assert scheduler.processes["local"][1].type == JobType.TRAINING
+        scheduler._shutdown_processes()
+        jobs.get_pending_train_jobs.return_value = [_training_job(trainer_id=uuid4())]
+        await scheduler._schedule_jobs()
+        assert process.call_count == 3
+        assert scheduler.processes["local"][1].id == optimization.id
+        scheduler._shutdown_processes()
+
+
+@pytest.mark.anyio
+async def test_recovery_cleans_only_abandoned_optimization_output_and_notifies(scheduler, services):
+    jobs, _, _ = services
+    active, orphan = _optimization_job(), _optimization_job()
+    active.status = orphan.status = JobStatus.RUNNING
+    scheduler.processes["local"] = (MagicMock(), active)
+    jobs.get_job_list.side_effect = [[], [active, orphan]]
+    with patch(f"{MODULE}.ModelOptimizationService.cleanup") as cleanup:
+        await scheduler._recover_jobs()
+        cleanup.assert_called_once_with(orphan.id)
+    jobs.update_job_status.assert_awaited_once_with(
+        orphan.id, JobStatus.FAILED, message="Model optimization worker stopped before completing the job"
+    )
+    scheduler.event_queue.put.assert_called_once()
+    scheduler._shutdown_processes()
+
+
+@pytest.mark.parametrize("job_type", list(JobType))
+def test_worker_registry_imports_only_the_assigned_job_type(job_type):
+    with patch(f"{MODULE}.import_module") as import_worker:
+        cancel = MagicMock()
+        _run_job(job_type, uuid4(), MagicMock(), cancel, MagicMock())
+    import_worker.assert_called_once()
+    worker_class = getattr(
+        import_worker.return_value,
+        {
+            JobType.TRAINING: "TrainingWorker",
+            JobType.DATASET_IMPORT: "DatasetImportWorker",
+            JobType.OPTIMIZE_MODEL: "ModelOptimizationWorker",
+        }[job_type],
+    )
+    worker_class.return_value.run.assert_called_once()
+    assert ("cancel_event" in worker_class.call_args.kwargs) == (job_type != JobType.DATASET_IMPORT)
+
+
+@pytest.mark.anyio
+async def test_reap_notifies_clients_if_optimization_exits_after_publication(scheduler, services):
+    job = _optimization_job()
+    job.status = JobStatus.COMPLETED
+    services[0].get_jobs_by_ids.return_value = [job]
+    process = MagicMock()
+    process.is_alive.return_value = False
+    scheduler.processes["local"] = (process, job)
+    with patch(f"{MODULE}.ModelOptimizationService.cleanup") as cleanup:
+        await scheduler._reap_processes()
+        cleanup.assert_not_called()
+    scheduler.event_queue.put.assert_called_once_with((EventType.JOB_UPDATE, job))
+    services[0].update_job_status.assert_not_awaited()

@@ -28,10 +28,11 @@ backend/src/
 ```
 
 `core/scheduler.py` polls SQLite in a backend thread and starts a short-lived
-process for each runnable training job or dataset-import step. Idle Studio
-instances do not run training or import workers. Local training runs one job at
-a time; remote training reserves each trainer/GPU target independently. One
-import can run alongside training, and no import worker stays alive while
+process for each runnable training, model-optimization, or dataset-import job.
+Idle Studio instances do not run job workers. Local training and model
+optimization share one exclusive local slot; remote training reserves each
+trainer/GPU target independently. One import can run alongside them, and no
+import worker stays alive while
 waiting for user review. The scheduler reaps completed processes, reconciles
 abandoned jobs, and stops active workers during application shutdown. Per-job
 multiprocessing events handle cancellation without a manager process. Shutdown
@@ -110,6 +111,30 @@ unavailable on network-exposed deployments because the Studio API has no
 authentication. See
 [`docs/explanation/ssh-remote-trainer.md`](docs/explanation/ssh-remote-trainer.md)
 before registering one.
+
+### OpenVINO Weight Optimization
+
+In a model's **Model formats** tab, choose **Optimize to INT8** on its OpenVINO
+card. Studio queues an `optimize_model` job and compresses the policy's weights
+with NNCF's symmetric INT8 mode. The model needs a complete OpenVINO export;
+optimization does not export a missing format or require a calibration dataset.
+NNCF is included in the backend dependencies.
+
+The original stays unchanged. A separate **(INT8)** model appears when the job
+completes; use **Run model** on either entry to choose the original or optimized
+policy. Both use the standard OpenVINO backend and support export downloads.
+The optimized entry contains inference artifacts, not a training checkpoint or
+an owned dataset snapshot, so retraining is available only on the original.
+
+Optimization runs locally, including for models trained on remote trainers.
+Its status and cancellation control appear on the source model's OpenVINO card.
+NNCF cannot be interrupted during compression: cancellation discards its result
+once that call finishes. Failed or interrupted jobs discard unpublished files
+and can be retried; Studio reconciles abandoned jobs after a restart.
+
+This is **weight-only** compression, not full INT8 activation quantization.
+Model size, inference speed, and policy accuracy depend on the model and device.
+Validate the optimized policy before deploying it to a robot.
 
 ### Database Migrations
 

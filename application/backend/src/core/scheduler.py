@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import multiprocessing as mp
 import threading
+from importlib import import_module
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -16,6 +17,7 @@ from schemas.job import DatasetImportJob, RemoteTrainJobPayload, TrainJobPayload
 from services.dataset_import.service import DatasetImportService
 from services.event_processor import EventType
 from services.job_service import JobService
+from services.model_optimization_service import ModelOptimizationService
 from services.remote_trainer_service import RemoteTrainerService
 from services.training_service import TrainingService
 from services.training_targets import target_key
@@ -29,31 +31,38 @@ if TYPE_CHECKING:
     from workers.base import BaseProcessWorker
 
 
+# Worker imports stay inside child processes, including future export/optimization jobs.
+_WORKERS = {
+    JobType.TRAINING: ("workers.training_worker", "TrainingWorker"),
+    JobType.DATASET_IMPORT: ("workers.dataset_import_worker", "DatasetImportWorker"),
+    JobType.OPTIMIZE_MODEL: ("workers.model_optimization_worker", "ModelOptimizationWorker"),
+}
+_CANCELABLE_JOB_TYPES = frozenset({JobType.TRAINING, JobType.OPTIMIZE_MODEL})
+
+
 def _run_job(
     job_type: JobType, job_id: UUID, stop_event: EventClass, cancel_event: EventClass | None, queue: mp.Queue
 ) -> None:
     """Import and run the assigned worker only inside its child process."""
-    worker: BaseProcessWorker
-    if job_type == JobType.TRAINING:
-        from workers.training_worker import TrainingWorker
-
-        if cancel_event is None:
-            raise ValueError("Training jobs require a cancellation event")
-        worker = TrainingWorker(job_id=job_id, stop_event=stop_event, cancel_event=cancel_event, event_queue=queue)
-    elif job_type == JobType.DATASET_IMPORT:
-        from workers.dataset_import_worker import DatasetImportWorker
-
-        worker = DatasetImportWorker(job_id=job_id, stop_event=stop_event, event_queue=queue)
-    else:
+    if job_type not in _WORKERS:
         raise ValueError(f"Unsupported job type: {job_type}")
+    module_name, class_name = _WORKERS[job_type]
+    worker_class = getattr(import_module(module_name), class_name)
+    kwargs = {"job_id": job_id, "stop_event": stop_event, "event_queue": queue}
+    if job_type in _CANCELABLE_JOB_TYPES:
+        if cancel_event is None:
+            raise ValueError(f"{job_type} jobs require a cancellation event")
+        kwargs["cancel_event"] = cancel_event
+    worker: BaseProcessWorker = worker_class(**kwargs)
     worker.run()
 
 
 class Scheduler:
     """Poll jobs in a thread and own the short-lived processes that execute them.
 
-    Local training is exclusive; remote training retains per-trainer/GPU
-    reservations. One dataset import can run alongside training.
+    Local training and model optimization share one exclusive local slot;
+    remote training retains per-trainer/GPU reservations. One dataset import
+    can run alongside them.
     """
 
     def __init__(self) -> None:
@@ -100,9 +109,15 @@ class Scheduler:
 
     async def _schedule_jobs(self) -> None:
         async with get_async_db_session_ctx() as session:
-            jobs = await JobService(session).get_pending_train_jobs()
+            service = JobService(session)
+            jobs = await service.get_pending_train_jobs()
+            jobs.extend(await service.get_pending_jobs(JobType.OPTIMIZE_MODEL))
         for job in jobs:
-            target = target_key(TrainJobPayloadAdapter.validate_python(job.payload))
+            target = (
+                target_key(TrainJobPayloadAdapter.validate_python(job.payload))
+                if job.type == JobType.TRAINING
+                else "local"
+            )
             if not self._target_is_busy(target, self.processes):
                 self._start_job(target, job)
 
@@ -120,7 +135,7 @@ class Scheduler:
         if self.mp_stop_event.is_set():
             return
         cancel_event = None
-        if job.type == JobType.TRAINING:
+        if job.type in _CANCELABLE_JOB_TYPES:
             cancel_event = self._cancel_events.setdefault(job.id, mp.Event())
         process = mp.Process(
             target=_run_job,
@@ -139,8 +154,8 @@ class Scheduler:
             if process.pid is not None:
                 process.join()
             reattaching = False
-            # Startup failures can leave training PENDING before the worker claims it.
-            if job.type == JobType.TRAINING:
+            # Startup failures can leave a job PENDING before the worker claims it.
+            if job.type in _CANCELABLE_JOB_TYPES:
                 async with get_async_db_session_ctx() as session:
                     service = JobService(session)
                     current_jobs = await service.get_jobs_by_ids([job.id])
@@ -158,9 +173,22 @@ class Scheduler:
                         and not self.mp_stop_event.is_set()
                     ):
                         failed = await service.update_job_status(
-                            job.id, JobStatus.FAILED, message="Training worker exited before completing the job"
+                            job.id,
+                            JobStatus.FAILED,
+                            message=(
+                                "Training worker exited before completing the job"
+                                if job.type == JobType.TRAINING
+                                else "Model optimization worker exited before completing the job"
+                            ),
                         )
                         self.event_queue.put((EventType.JOB_UPDATE, failed))
+                    elif (
+                        current_jobs
+                        and job.type == JobType.OPTIMIZE_MODEL
+                        and current_jobs[0].status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELED}
+                    ):
+                        # A worker can exit after committing but before its event reaches the queue.
+                        self.event_queue.put((EventType.JOB_UPDATE, current_jobs[0]))
             if not reattaching:
                 self._cancel_events.pop(job.id, None)
             if process.pid is not None:
@@ -184,13 +212,18 @@ class Scheduler:
             recovered = await TrainingService.abort_orphan_jobs(service, exclude_job_ids=active_ids)
             for job in recovered:
                 self.event_queue.put((EventType.JOB_UPDATE, job))
-            imports = await service.get_job_list(
-                extra_filters={"status": JobStatus.RUNNING, "type": JobType.DATASET_IMPORT}
-            )
-            for job in imports:
-                if job.id not in active_ids:
+            for job_type, label in (
+                (JobType.DATASET_IMPORT, "Dataset import"),
+                (JobType.OPTIMIZE_MODEL, "Model optimization"),
+            ):
+                orphans = await service.get_job_list(extra_filters={"status": JobStatus.RUNNING, "type": job_type})
+                for job in orphans:
+                    if job.id in active_ids:
+                        continue
+                    if job.type == JobType.OPTIMIZE_MODEL:
+                        ModelOptimizationService.cleanup(job.id)
                     failed = await service.update_job_status(
-                        job.id, JobStatus.FAILED, message="Dataset import worker stopped before completing the job"
+                        job.id, JobStatus.FAILED, message=f"{label} worker stopped before completing the job"
                     )
                     self.event_queue.put((EventType.JOB_UPDATE, failed))
 

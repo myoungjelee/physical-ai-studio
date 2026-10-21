@@ -11,7 +11,7 @@ from core.scheduler import Scheduler
 from exceptions import InvalidJobStateError, ResourceNotFoundError, ResourceType
 from schemas import Job
 from schemas.base_job import JobStatus
-from schemas.job import RemoteTrainJobPayload, TrainJob, TrainJobPayload
+from schemas.job import OptimizeModelJob, RemoteTrainJobPayload, TrainJob, TrainJobPayload
 from services import JobService, ModelMetricsService
 from services.event_processor import EventProcessor, EventType
 
@@ -72,6 +72,10 @@ async def interrupt_job(
         # Claiming and queued cancellation compete atomically. Once claimed,
         # keep RUNNING until the worker releases its files and flushes progress.
         if await job_service.cancel_pending_train_job(job_id) is None:
+            scheduler.cancel_job(job_id)
+        return
+    if isinstance(job, OptimizeModelJob):
+        if await job_service.cancel_pending_job(job_id, job.type) is None:
             scheduler.cancel_job(job_id)
         return
     await job_service.update_job_status(job_id, status=JobStatus.CANCELED)

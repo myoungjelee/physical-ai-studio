@@ -70,6 +70,18 @@ class JobService:
         """Return pending training jobs in submission order."""
         return await self.repo.get_pending_jobs_by_type(JobType.TRAINING)
 
+    async def get_pending_jobs(self, job_type: JobType) -> list[Job]:
+        """Return queued jobs of a given type in submission order."""
+        return await self.repo.get_pending_jobs_by_type(job_type)
+
+    async def claim_pending_job(self, job_id: UUID, job_type: JobType) -> Job | None:
+        """Claim an assigned job unless a queued cancellation won the race."""
+        return await self.repo.transition_pending_job(job_id, JobStatus.RUNNING, job_type)
+
+    async def cancel_pending_job(self, job_id: UUID, job_type: JobType) -> Job | None:
+        """Cancel an unclaimed job without overwriting a worker's claim."""
+        return await self.repo.transition_pending_job(job_id, JobStatus.CANCELED, job_type)
+
     async def claim_pending_train_job(self, job_id: UUID) -> Job | None:
         """Claim a training job before preparation unless it has already been canceled."""
         return await self.repo.transition_pending_train_job(job_id, JobStatus.RUNNING)

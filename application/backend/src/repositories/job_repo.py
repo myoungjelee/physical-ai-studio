@@ -11,7 +11,7 @@ from repositories.mappers import JobMapper
 from schemas import Job
 from schemas.base_job import JobStatus, JobType
 from schemas.dataset_import_job import ImportStep
-from schemas.job import TrainingTarget, TrainJobPayload
+from schemas.job import JobPayload, TrainingTarget
 
 
 class JobRepository(BaseRepository):
@@ -26,7 +26,7 @@ class JobRepository(BaseRepository):
     def from_schema(self) -> Callable[[JobDB], Job]:
         return JobMapper.from_schema
 
-    async def is_job_duplicate(self, project_id: UUID, payload: TrainJobPayload) -> bool:
+    async def is_job_duplicate(self, project_id: UUID, payload: JobPayload) -> bool:
         # Match the JSON representation stored by JobMapper, including UUID values.
         payload_dict = payload.model_dump(mode="json")
 
@@ -58,19 +58,22 @@ class JobRepository(BaseRepository):
         )
 
     async def transition_pending_train_job(self, job_id: UUID, status: JobStatus) -> Job | None:
-        """Atomically claim or cancel a queued training job, never overwrite another state."""
+        """Atomically claim or cancel training, preserving remote reattachment."""
+        return await self.transition_pending_job(job_id, status, JobType.TRAINING)
+
+    async def transition_pending_job(self, job_id: UUID, status: JobStatus, job_type: JobType) -> Job | None:
+        """Atomically claim or cancel a queued job, never overwrite another state."""
         if status not in {JobStatus.RUNNING, JobStatus.CANCELED}:
-            raise ValueError("Queued training jobs can only be claimed or canceled")
+            raise ValueError("Queued jobs can only be claimed or canceled")
         now = datetime.datetime.now(tz=datetime.UTC)
         values: dict = {"status": status}
+        label = "Training" if job_type == JobType.TRAINING else "Model optimization"
         if status == JobStatus.RUNNING:
-            values.update(start_time=func.coalesce(JobDB.start_time, now), message="Preparing training")
+            values.update(start_time=func.coalesce(JobDB.start_time, now), message=f"Preparing {label.lower()}")
         else:
-            values.update(end_time=now, message="Training canceled")
-        query = update(JobDB).where(
-            JobDB.id == str(job_id), JobDB.type == JobType.TRAINING, JobDB.status == JobStatus.PENDING
-        )
-        if status == JobStatus.CANCELED:
+            values.update(end_time=now, message=f"{label} canceled")
+        query = update(JobDB).where(JobDB.id == str(job_id), JobDB.type == job_type, JobDB.status == JobStatus.PENDING)
+        if status == JobStatus.CANCELED and job_type == JobType.TRAINING:
             # Requeued remote executions must be canceled by a reattached worker.
             query = query.where(
                 or_(
