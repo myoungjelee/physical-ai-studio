@@ -22,11 +22,12 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Iterator
 
+import pandas as pd
 import pytest
 from lightning.pytorch.callbacks import ModelCheckpoint
 from physicalai.capture import IPCamera
 from physicalai.robot import SharedRobot
-from physicalai.runtime import PolicySource, RobotRuntime, SyncExecution
+from physicalai.runtime import ChunkedActionQueue, PolicySource, RobotRuntime, SyncExecution
 
 from physicalai.data import LeRobotDataModule
 from physicalai.inference import InferenceModel
@@ -40,7 +41,6 @@ from tests.integration.simulation_e2e import (
     checkpoint_entry,
     command,
     dataset_entry,
-    health,
     prepare_episode,
     score,
     verify_checkpoint,
@@ -133,7 +133,23 @@ def _record_video(
                 raise RuntimeError(f"ffmpeg did not save an inference video; see {log_path}")
 
 
-def _trials(export: Path, metadata: dict, output: Path, name: str) -> list[dict]:
+def _task_instruction(dataset: Path) -> str:
+    """Read the single conveyor task without silently choosing among instructions."""
+    tasks = pd.read_parquet(dataset / "meta/tasks.parquet")
+    if len(tasks) != 1 or not isinstance(tasks.index[0], str) or not tasks.index[0].strip():
+        raise ValueError("Simulation recording must contain exactly one non-empty task instruction")
+    return tasks.index[0]
+
+
+def _policy_source(model: InferenceModel, name: str, task: str) -> PolicySource:
+    if name == "act":
+        # Native ACT consumes the full action horizon without crossfading predictions.
+        return PolicySource(model=model, execution=SyncExecution(request_threshold=0.0),
+                            action_queue=ChunkedActionQueue(), task=task)
+    return PolicySource(model=model, execution=SyncExecution(request_threshold=0.5), task=task)
+
+
+def _trials(export: Path, metadata: dict, output: Path, name: str, task: str) -> list[dict]:
     url = os.environ["SIM_E2E_HTTP_URL"]
     owner = os.environ["SIM_E2E_OWNER"]
     cameras = sorted(k.removeprefix("observation.images.") for k in metadata["features"]
@@ -151,14 +167,14 @@ def _trials(export: Path, metadata: dict, output: Path, name: str) -> list[dict]
             monitor = EpisodeMonitor(url, before, stop, float(os.environ.get("SIM_E2E_ROLLOUT_SECONDS", "180")))
             runtime = RobotRuntime(
                 robot=SharedRobot.attach(name=owner),
-                action_source=PolicySource(model=model, execution=SyncExecution(request_threshold=0.5)),
+                action_source=_policy_source(model, name, task),
                 cameras={key: IPCamera(url=f"{url.rstrip('/')}/cameras/{camera_map.get(key, key)}/mjpeg")
                          for key in cameras},
                 fps=float(metadata["fps"]), callbacks=[monitor],
             )
             try:
                 with runtime:
-                    # Runtime connects its policy source on run(), not __enter__().
+                    # Each run reconnects and resets the source; do not reset it while disconnected.
                     monitor.recording = False
                     runtime.run(stop_event=stop)
                     stop.clear()
@@ -227,11 +243,12 @@ def test_train_export_and_run_in_simulation(scene: str, tmp_path: Path) -> None:
         raise ValueError("Recording episode count does not match selected dataset")
     assert metadata["features"]["action"]["shape"] == [6]
     assert metadata["features"]["observation.state"]["shape"] == [6]
+    task = _task_instruction(dataset)
     export = output / "export"
     policy.eval().cpu().export(export, backend="openvino")
     assert (export / "manifest.json").is_file()
     del policy
-    trials = _trials(export, metadata, output, name)
+    trials = _trials(export, metadata, output, name, task)
     mean_score = score([episode for trial in trials for episode in trial["episodes"]])
     timing_ok = all(
         t["control_hz"] is not None and t["control_hz"] >= metadata["fps"] * 0.8

@@ -16,10 +16,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
+import pandas as pd
 import pytest
 import yaml
-
+from physicalai.inference.preprocessors.new_line import NewLinePreprocessor
 from scripts.simulation_report import summarize
+
 from tests.integration import simulation_e2e as controls
 from tests.integration import test_simulation_training_e2e as suite
 
@@ -179,6 +181,8 @@ def test_evaluation_reports_quality_and_timing_separately(tmp_path, monkeypatch,
     (tmp_path / "meta").mkdir()
     (tmp_path / "meta/info.json").write_text(json.dumps({"fps": 30, "total_episodes": int(dataset), "features": {
         "action": {"shape": [6]}, "observation.state": {"shape": [6]}}}))
+    pd.DataFrame({"task_index": [0]}, index=pd.Index(["Sort conveyor items"], name="task")).to_parquet(
+        tmp_path / "meta/tasks.parquet")
     monkeypatch.setenv("SIM_E2E_MODE", "evaluate")
     monkeypatch.setenv("SIM_E2E_POLICY", "act")
     monkeypatch.setenv("SIM_E2E_DATASET_DIR", str(tmp_path))
@@ -229,7 +233,45 @@ def test_weekly_report_does_not_promote_missing_or_zero_scores(tmp_path):
     assert "| xr0 | failed/incomplete | not evaluated | not evaluated | baseline unavailable |" in report
 
 
-def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch):
+@pytest.mark.parametrize("chunk_size", [1, 4, 100])
+def test_act_execution_drains_chunks_without_blending(chunk_size: int) -> None:
+    calls = []
+    actions: list[np.ndarray] = []
+
+    def predict(_observation: dict) -> np.ndarray:
+        calls.append(len(actions))
+        return (np.arange(chunk_size, dtype=np.float32) + (len(calls) - 1) * 1000)[:, None]
+
+    model = SimpleNamespace(predict_action_chunk=predict, reset=lambda: None)
+    source = suite._policy_source(model, "act", "Sort conveyor items")
+    source.action_queue.push_chunk(np.ones((2, 1), dtype=np.float32))
+    source.action_queue.push_chunk(np.zeros((2, 1), dtype=np.float32))
+    np.testing.assert_array_equal(source.action_queue.pop(), [0])
+    source.connect(bus=MagicMock(), session_id="test")
+    try:
+        for step in range(3 * chunk_size):
+            actions.append(source.update(SimpleNamespace(state=np.zeros(6), images=None), {}, step))
+        expected = np.concatenate([np.arange(chunk_size) + i * 1000 for i in range(3)])
+        np.testing.assert_array_equal(np.asarray(actions)[:, 0], expected)
+        assert calls == [0, chunk_size, 2 * chunk_size]
+    finally:
+        source.disconnect()
+
+
+@pytest.mark.parametrize("name", [name for name in controls.POLICIES if name != "act"])
+def test_other_policies_keep_existing_execution(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    make_source = MagicMock()
+    make_execution = MagicMock()
+    monkeypatch.setattr(suite, "PolicySource", make_source)
+    monkeypatch.setattr(suite, "SyncExecution", make_execution)
+    model = MagicMock()
+    suite._policy_source(model, name, "Sort conveyor items")
+    make_execution.assert_called_once_with(request_threshold=0.5)
+    make_source.assert_called_once_with(model=model, execution=make_execution.return_value, task="Sort conveyor items")
+
+
+@pytest.mark.parametrize("name", controls.POLICIES)
+def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch, name):
     events = []
     monkeypatch.setattr(suite, "SEEDS", (42,))
     monkeypatch.setenv("SIM_E2E_HTTP_URL", "http://localhost")
@@ -241,7 +283,6 @@ def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch):
     monkeypatch.setattr(suite, "InferenceModel", MagicMock())
     monkeypatch.setattr(suite, "SharedRobot", MagicMock())
     monkeypatch.setattr(suite, "IPCamera", MagicMock())
-    monkeypatch.setattr(suite, "PolicySource", MagicMock())
     monitor = MagicMock(actions_sent=2, max_joint_change=2)
     monitor.begin.side_effect = lambda before: events.append("begin")
     monitor.result.return_value = {"score": 0.7}
@@ -249,9 +290,67 @@ def test_trial_warms_then_reseeds_before_resuming(tmp_path, monkeypatch):
     runtime = MagicMock()
     runtime.run.side_effect = lambda **kwargs: events.append("run")
     monkeypatch.setattr(suite, "RobotRuntime", MagicMock(return_value=runtime))
-    suite._trials(tmp_path, {"fps": 30, "features": {"observation.images.wrist": {}}}, tmp_path, "act")
+    task = "Sort conveyor items by color and reject cracks"
+    suite._trials(tmp_path, {"fps": 30, "features": {"observation.images.wrist": {}}}, tmp_path, name, task)
+    source = suite.RobotRuntime.call_args.kwargs["action_source"]
+    inputs = source.to_model_input(SimpleNamespace(state=np.zeros(6), images={}), {})
+    assert NewLinePreprocessor()(inputs)["task"] == [task + "\n"]
     assert events == ["prepare", "run", "prepare", "begin", "resume", "run", "pause"]
     runtime.disconnect.assert_called_once()
+
+
+def test_trial_reconnects_and_discards_warmup_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(suite, "SEEDS", (42,))
+    monkeypatch.setenv("SIM_E2E_HTTP_URL", "http://localhost")
+    monkeypatch.setenv("SIM_E2E_OWNER", "test")
+    monkeypatch.setenv("SIM_E2E_RECORD_VIDEO", "false")
+    monkeypatch.setattr(suite, "prepare_episode", lambda *args: snapshot())
+    monkeypatch.setattr(suite, "command", MagicMock())
+    monkeypatch.setattr(suite, "wait_health", MagicMock())
+    model = MagicMock()
+    model.predict_action_chunk.side_effect = [np.ones((100, 6), dtype=np.float32),
+                                             np.full((100, 6), 2, dtype=np.float32)]
+    monkeypatch.setattr(suite, "InferenceModel", MagicMock(return_value=model))
+    robot = MagicMock()
+    robot.joint_names = [f"joint_{i}" for i in range(6)]
+    robot.get_observation.return_value = SimpleNamespace(state=np.zeros(6), joint_positions=np.zeros(6), images=None)
+    monkeypatch.setattr(suite.SharedRobot, "attach", MagicMock(return_value=robot))
+    camera = MagicMock()
+    camera.read_latest.return_value = SimpleNamespace(data=np.zeros((12, 16, 3), dtype=np.uint8), timestamp=0.0)
+    monkeypatch.setattr(suite, "IPCamera", MagicMock(return_value=camera))
+
+    def make_monitor(_url: str, _before: dict, stop: threading.Event, _timeout: float) -> SimpleNamespace:
+        return SimpleNamespace(on_tick=lambda event: stop.set(), begin=MagicMock(), close=MagicMock(),
+                               result=lambda seed: {"seed": seed}, actions_sent=1, max_joint_change=2,
+                               finished=threading.Event(), thread=SimpleNamespace(ident=None))
+
+    monkeypatch.setattr(suite, "EpisodeMonitor", make_monitor)
+    # Keep RobotRuntime and PolicySource real so a reset between run() calls would fail.
+    trials = suite._trials(tmp_path, {"fps": 30, "features": {"observation.images.wrist": {}}}, tmp_path,
+                           "act", "Sort conveyor items")
+    assert trials == [{"seed": 42}]
+    assert model.reset.call_count == 2
+    assert model.predict_action_chunk.call_count == 2
+    assert robot.send_action.call_count == 2
+    np.testing.assert_array_equal(robot.send_action.call_args_list[0].args[0], np.ones(6))
+    np.testing.assert_array_equal(robot.send_action.call_args_list[1].args[0], np.full(6, 2))
+
+
+@pytest.mark.parametrize("instructions", [[], [""], ["  "], [0], ["Sort", "Reject"]])
+def test_rollout_rejects_missing_or_ambiguous_task(tmp_path: Path, instructions: list[str | int]) -> None:
+    (tmp_path / "meta").mkdir()
+    pd.DataFrame({"task_index": range(len(instructions))}, index=pd.Index(instructions, name="task")).to_parquet(
+        tmp_path / "meta/tasks.parquet")
+    with pytest.raises(ValueError, match="exactly one non-empty task instruction"):
+        suite._task_instruction(tmp_path)
+
+
+def test_rollout_reads_recorded_task_verbatim(tmp_path: Path) -> None:
+    (tmp_path / "meta").mkdir()
+    instruction = "Sort conveyor items by color and reject cracks"
+    pd.DataFrame({"task_index": [0]}, index=pd.Index([instruction], name="task")).to_parquet(
+        tmp_path / "meta/tasks.parquet")
+    assert suite._task_instruction(tmp_path) == instruction
 
 
 def test_paused_warmup_does_not_enter_trial_metrics():
