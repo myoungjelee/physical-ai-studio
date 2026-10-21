@@ -1,4 +1,14 @@
-import { AlertDialog, Button, DialogTrigger, Flex, RangeSlider, toast, View } from '@geti-ui/ui';
+import {
+    AlertDialog,
+    Button,
+    DialogTrigger,
+    Flex,
+    RangeSlider,
+    toast,
+    Tooltip,
+    TooltipTrigger,
+    View,
+} from '@geti-ui/ui';
 
 import { getApiErrorMessage } from '../../../api/errors';
 import { SchemaEpisode } from '../../../api/openapi-spec';
@@ -62,9 +72,14 @@ export const TrimEpisodeControls = ({ datasetId, episode, player, range, onRange
                 />
             </View>
             <Flex gap='size-100' justifyContent='end' margin='size-100'>
-                <Button variant='secondary' onPress={handleSuggest}>
-                    Suggest range
-                </Button>
+                <TooltipTrigger>
+                    <Button variant='secondary' onPress={handleSuggest}>
+                        Suggest range
+                    </Button>
+                    <Tooltip>
+                        Select frames where the robot is moving, skipping idle frames at the start and end.
+                    </Tooltip>
+                </TooltipTrigger>
                 <DialogTrigger>
                     <Button
                         variant='accent'

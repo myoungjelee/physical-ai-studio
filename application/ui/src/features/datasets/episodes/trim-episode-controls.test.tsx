@@ -115,6 +115,16 @@ describe('TrimEpisodeControls', () => {
         expect(screen.getByRole('button', { name: 'Trim' })).toBeEnabled();
     });
 
+    it('explains how the range is suggested in a tooltip', async () => {
+        const { user } = renderControls();
+
+        await user.hover(await screen.findByRole('button', { name: 'Suggest range' }));
+
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(
+            'Select frames where the robot is moving, skipping idle frames at the start and end.'
+        );
+    });
+
     it('shows an info toast when no idle frames are detected', async () => {
         const { user } = renderControls({ actions: IDLE_ACTIONS });
 
