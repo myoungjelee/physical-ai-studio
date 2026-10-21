@@ -13,8 +13,6 @@ import {
     type MouseHandlerDataParam,
 } from 'recharts';
 
-import type { TrimRange } from '../../features/datasets/episodes/trim-range';
-
 export const CHART_MARGIN = { top: 20, right: 20, left: 20, bottom: 20 };
 export const Y_AXIS_WIDTH = 60;
 export const CHART_HEIGHT = 300;
@@ -54,7 +52,7 @@ interface EpisodeChartProps {
     play: () => void;
     pause: () => void;
     isPlaying: boolean;
-    trimRange?: TrimRange;
+    highlightedRange?: { start: number; end: number };
 }
 
 export default function EpisodeChart({
@@ -66,10 +64,11 @@ export default function EpisodeChart({
     play,
     pause,
     isPlaying,
-    trimRange,
+    highlightedRange,
 }: EpisodeChartProps) {
     const [hoverPosition, setHoverPosition] = useState<number | undefined>(undefined);
     const [mouseDown, setMouseDown] = useState<boolean>(false);
+    const duration = actions.length / fps;
     const posJoints = useMemo(() => joints.filter(isPosJoint), [joints]);
     const chartData = useMemo(() => {
         return buildChartData(actions, posJoints, fps);
@@ -130,19 +129,19 @@ export default function EpisodeChart({
                     dataKey='index'
                     label={{ value: 'Time (s)', position: 'insideBottomRight', offset: -10 }}
                     ticks={ticks}
-                    domain={[0, actions.length / fps]}
+                    domain={[0, duration]}
                     type='number'
                 />
                 <YAxis width={Y_AXIS_WIDTH} label={{ value: 'Value (deg)', angle: -90, position: 'insideLeft' }} />
 
                 <Legend position='top' height={36} offset={10} />
-                {trimRange !== undefined && trimRange.start > 0 && (
-                    <ReferenceArea x1={0} x2={trimRange.start / fps} ifOverflow='hidden' fill='#000' stroke='none' />
+                {highlightedRange !== undefined && highlightedRange.start > 0 && (
+                    <ReferenceArea x1={0} x2={highlightedRange.start} ifOverflow='hidden' fill='#000' stroke='none' />
                 )}
-                {trimRange !== undefined && trimRange.end < actions.length && (
+                {highlightedRange !== undefined && highlightedRange.end < duration && (
                     <ReferenceArea
-                        x1={trimRange.end / fps}
-                        x2={actions.length / fps}
+                        x1={highlightedRange.end}
+                        x2={duration}
                         ifOverflow='hidden'
                         fill='#000'
                         stroke='none'

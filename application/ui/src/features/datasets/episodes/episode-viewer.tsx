@@ -2,19 +2,16 @@ import { useEffect, useState } from 'react';
 
 import { Disclosure, DisclosurePanel, DisclosureTitle, Divider, Flex, Text } from '@geti-ui/ui';
 
-import { SchemaDatasetOutput, SchemaEnvironmentWithRelations, SchemaEpisode } from '../../api/openapi-spec';
-import EpisodeChart from '../../components/episode-chart/episode-chart';
-import { EpisodeDockView } from '../../features/datasets/episodes/episode-dock-view';
-import { EpisodeTag } from '../../features/datasets/episodes/episode-tag';
-import {
-    EpisodeViewerProvider,
-    useEpisodeViewer,
-} from '../../features/datasets/episodes/episode-viewer-provider.component';
-import { TrimEpisodeControls } from '../../features/datasets/episodes/trim-episode-controls';
-import { getFullTrimRange, TrimRange } from '../../features/datasets/episodes/trim-range';
-import { Player } from '../../features/datasets/episodes/use-player';
-import { RobotModelsProvider } from '../../features/robots/robot-models-context';
+import { SchemaDatasetOutput, SchemaEnvironmentWithRelations, SchemaEpisode } from '../../../api/openapi-spec';
+import EpisodeChart from '../../../components/episode-chart/episode-chart';
+import { RobotModelsProvider } from '../../robots/robot-models-context';
+import { EpisodeDockView } from './episode-dock-view';
+import { EpisodeTag } from './episode-tag';
+import { EpisodeViewerProvider, useEpisodeViewer } from './episode-viewer-provider.component';
 import { TimelineControls } from './timeline-controls';
+import { TrimEpisodeControls } from './trim-episode-controls';
+import { getFullTrimRange, TrimRange } from './trim-range';
+import { Player } from './use-player';
 
 import classes from './episode-viewer.module.css';
 
@@ -31,6 +28,11 @@ interface LiveEpisodeChartProps {
 }
 
 const LiveEpisodeChart = ({ episode, player, trimRange }: LiveEpisodeChartProps) => {
+    const highlightedRange = trimRange && {
+        start: trimRange.start / episode.fps,
+        end: trimRange.end / episode.fps,
+    };
+
     const [time, setTime] = useState<number>(player.timeRef.current);
 
     useEffect(() => {
@@ -58,7 +60,7 @@ const LiveEpisodeChart = ({ episode, player, trimRange }: LiveEpisodeChartProps)
             isPlaying={player.isPlaying}
             play={player.play}
             pause={player.pause}
-            trimRange={trimRange}
+            highlightedRange={highlightedRange}
         />
     );
 };

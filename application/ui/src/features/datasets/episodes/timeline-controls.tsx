@@ -3,8 +3,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActionButton, Flex, Text } from '@geti-ui/ui';
 import { Pause, Play, StepBackward } from '@geti-ui/ui/icons';
 
-import { Player } from '../../features/datasets/episodes/use-player';
-import { toMMSS } from '../../utils';
+import { toMMSS } from '../../../utils';
+import { Player } from './use-player';
 
 interface TimelineControlsProps {
     player: Player;
