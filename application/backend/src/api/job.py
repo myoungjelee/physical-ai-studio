@@ -8,6 +8,7 @@ from sse_starlette import EventSourceResponse
 
 from api.dependencies import get_event_processor_ws, get_job_service, get_model_metrics_service, get_scheduler
 from core.scheduler import Scheduler
+from core.security import require_aws_feature_active
 from exceptions import InvalidJobStateError, ResourceNotFoundError, ResourceType
 from schemas import Job
 from schemas.aws_auth import AwsAuthenticationIssue
@@ -76,6 +77,7 @@ async def interrupt_job(
         and job.payload.remote_trainer_url
         and job.payload.remote_trainer_url.startswith("aws-batch://")
     ):
+        require_aws_feature_active()
         await job_service.update_remote_job_state(job_id, cancel_requested=True)
         if job.payload.remote_job_id is not None or job.status == JobStatus.RUNNING:
             scheduler.cancel_job(job_id)
@@ -111,6 +113,7 @@ async def get_model_job_metrics(
         and job.payload.remote_trainer_url is not None
         and job.payload.remote_trainer_url.startswith("aws-batch://")
     ):
+        require_aws_feature_active()
         return EventSourceResponse(
             model_metrics_service.tail_batch_csv_file(job.payload.remote_trainer_url, str(job.id))
         )

@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from loguru import logger
 
+from core.security import require_aws_feature_active
 from schemas.aws_auth import AwsAuthenticationIssue
 from schemas.remote_trainer import (
     AwsBatchConnection,
@@ -84,6 +85,7 @@ def batch_policy_catalog(connection: AwsBatchConnection) -> PolicyCatalog:
 
 def _make_session(connection: AwsBatchConnection) -> Any:
     """Assume the stack's Studio role using the selected named profile."""
+    require_aws_feature_active()
     import boto3
     from botocore.config import Config
 
@@ -100,6 +102,7 @@ def _make_session(connection: AwsBatchConnection) -> Any:
 
 def resolve_aws_batch_configuration(configuration: AwsBatchProviderConfiguration) -> AwsBatchConnection:
     """Load and validate configuration using the selected named profile."""
+    require_aws_feature_active()
     import boto3
 
     location = urlsplit(configuration.configuration_uri)

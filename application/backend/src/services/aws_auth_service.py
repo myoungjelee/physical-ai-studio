@@ -3,6 +3,7 @@
 import asyncio
 import shlex
 
+from core.security import require_aws_feature_active
 from schemas.aws_auth import AwsAuthCapabilities, AwsAuthenticationIssue, AwsCredentialSelection, AwsIdentity
 from schemas.remote_trainer import CloudProviderError
 
@@ -90,6 +91,7 @@ def aws_auth_error(error: Exception, profile_name: str | None = None) -> CloudPr
 
 def check_credentials(selection: AwsCredentialSelection) -> AwsIdentity:
     """Validate the selected named profile without changing AWS configuration."""
+    require_aws_feature_active()
     import boto3
     from botocore.config import Config
 
@@ -146,4 +148,5 @@ def _profiles() -> list[str]:
 
 async def get_capabilities() -> AwsAuthCapabilities:
     """List profiles configured on the backend without authenticating."""
+    require_aws_feature_active()
     return AwsAuthCapabilities(profiles=await asyncio.to_thread(_profiles))
