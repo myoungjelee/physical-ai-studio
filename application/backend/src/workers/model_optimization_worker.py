@@ -14,7 +14,7 @@ from repositories.mappers.job_mapper import JobMapper
 from repositories.mappers.model_mapper import ModelMapper
 from schemas.base_job import JobStatus, JobType
 from schemas.job import OptimizeModelJob
-from schemas.model import Model, ModelOptimizationInfo
+from schemas.model import Model
 from services.event_processor import EventType
 from services.job_service import JobService
 from services.model_optimization_service import ModelOptimizationService
@@ -76,14 +76,13 @@ class ModelOptimizationWorker(BaseProcessWorker):
         if self.should_stop() or self.cancel_event.is_set():
             await self._finish(job, JobStatus.CANCELED, "Model optimization canceled")
             return None
-        ModelOptimizationService.optimize_export(source, staging)
+        metadata = ModelOptimizationService.optimize_export(source, staging)
         # NNCF cannot be interrupted mid-call; never publish its output after cancellation.
         if self.should_stop() or self.cancel_event.is_set():
             ModelOptimizationService.cleanup(job.id)
             await self._finish(job, JobStatus.CANCELED, "Model optimization canceled")
             return None
         staging.rename(destination)
-        metadata = ModelOptimizationInfo(source_model_id=source.id, mode=job.payload.mode)
         model = Model(
             id=job.id,
             name=f"{source.name} (INT8)",

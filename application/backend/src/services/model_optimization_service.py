@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from exceptions import DuplicateJobException, InsufficientDiskSpaceError, InvalidResourceError
 from repositories.job_repo import JobRepository
 from schemas.job import OptimizeModelJob, OptimizeModelJobPayload
-from schemas.model import Model
+from schemas.model import Model, ModelOptimizationInfo
 from services.model_service import ModelService
 from settings import get_settings
 
@@ -57,8 +57,8 @@ class ModelOptimizationService:
         return model_path
 
     @staticmethod
-    def optimize_export(model: Model, destination: Path) -> None:
-        """Copy and compress only the policy IR, preserving manifests and tokenizers."""
+    def optimize_export(model: Model, destination: Path) -> ModelOptimizationInfo:
+        """Copy and compress the policy IR, recording portable optimization metadata."""
         from physicalai.export.hooks import compress_weights_openvino_int8_sym
 
         source = Path(model.path) / "exports" / "openvino"
@@ -69,7 +69,17 @@ class ModelOptimizationService:
             raise InsufficientDiskSpaceError("Not enough disk space to copy and optimize the OpenVINO export")
         export_dir = destination / "exports" / "openvino"
         shutil.copytree(source, export_dir)
+        manifest_path = export_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        studio = manifest.setdefault("studio", {})
+        if not isinstance(studio, dict):
+            raise InvalidResourceError("Model", "The manifest's studio metadata must be an object")
         compress_weights_openvino_int8_sym(str(export_dir / artifact))
+        optimization = ModelOptimizationInfo(source_model_id=model.id)
+        studio["optimization"] = optimization.model_dump(mode="json")
+        # Runtime preserves application-specific top-level manifest fields.
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        return optimization
 
     @staticmethod
     def cleanup(job_id: UUID) -> None:

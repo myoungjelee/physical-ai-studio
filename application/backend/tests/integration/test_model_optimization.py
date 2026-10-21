@@ -3,14 +3,16 @@
 
 import json
 import multiprocessing as mp
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from physicalai.inference.manifest import Manifest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -21,9 +23,12 @@ from exceptions import DuplicateJobException, InvalidResourceError
 from main import app
 from repositories.job_repo import JobRepository
 from schemas.base_job import JobStatus, JobType
+from schemas.dataset import Dataset
 from schemas.model import Model
 from services.event_processor import EventType
 from services.job_service import JobService
+from services.model_download_service import ModelDownloadService
+from services.model_import_service import ModelImportService
 from services.model_optimization_service import ModelOptimizationService
 from services.model_service import ModelService
 from settings import get_settings
@@ -70,7 +75,17 @@ async def optimization(tmp_path, monkeypatch):
     (export_dir / "act.bin").write_bytes(b"original weights")
     (export_dir / "tokenizer.xml").write_text("tokenizer graph")
     (export_dir / "tokenizer.bin").write_bytes(b"tokenizer weights")
-    (export_dir / "manifest.json").write_text(json.dumps({"model": {"artifacts": {"openvino": "act.xml"}}}))
+    (export_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "format": "policy_package",
+                "policy": {"name": "act"},
+                "model": {"artifacts": {"openvino": "act.xml"}},
+                "studio": {"note": "preserved"},
+                "other_extension": {"enabled": True},
+            }
+        )
+    )
     async with session_scope() as session:
         session.add(ProjectDB(id=str(source.project_id), name="Test project"))
         await session.commit()
@@ -121,7 +136,11 @@ async def test_optimize_api_creates_independent_model_and_preserves_original(opt
     assert (original_export / "act.bin").read_bytes() == b"original weights"
     assert (optimized_export / "act.bin").read_bytes() == b"INT8"
     assert (optimized_export / "tokenizer.bin").read_bytes() == b"tokenizer weights"
-    assert (optimized_export / "manifest.json").read_bytes() == (original_export / "manifest.json").read_bytes()
+    original_manifest = json.loads((original_export / "manifest.json").read_text())
+    optimized_manifest = json.loads((optimized_export / "manifest.json").read_text())
+    assert original_manifest["studio"] == {"note": "preserved"}
+    assert optimized_manifest["studio"].pop("optimization") == optimized["optimization"]
+    assert optimized_manifest == original_manifest
     assert optimization.compressed == [optimization.models_dir / f".optimize-{job.id}" / "exports/openvino/act.xml"]
     async with optimization.sessions() as session:
         finished = await JobService(session).get_job_by_id(job.id)
@@ -133,6 +152,95 @@ async def test_optimize_api_creates_independent_model_and_preserves_original(opt
         EventType.MODEL_UPDATE,
         EventType.JOB_UPDATE,
     ]
+
+
+@pytest.mark.parametrize("exports_root", [True, False])
+async def test_optimization_marker_survives_download_and_import(optimization, tmp_path, monkeypatch, exports_root):
+    async with optimization.sessions() as session:
+        job = await ModelOptimizationService(session).submit(optimization.source.id)
+    await make_worker(job).run_loop()
+    model_dir = optimization.models_dir / str(job.id)
+    archive = ModelDownloadService().create_model_archive(model_dir)
+    restored_dir = tmp_path / "downloaded"
+    try:
+        with zipfile.ZipFile(archive) as downloaded:
+            downloaded.extractall(restored_dir)
+    finally:
+        archive.unlink()
+    manifest = Manifest.load(restored_dir / "exports/openvino")
+    metadata = {"source_model_id": str(optimization.source.id), "mode": "int8_sym"}
+    assert manifest.model_extra["studio"]["optimization"] == metadata
+    # Runtime can load/save the extension without discarding Studio's classification.
+    manifest.save(restored_dir / "exports/openvino/manifest.json")
+    dataset = Dataset(
+        name="Import context",
+        project_id=optimization.source.project_id,
+        environment_id=uuid4(),
+        default_task="test",
+    )
+    importer = ModelImportService(
+        get_dataset=AsyncMock(return_value=dataset),
+        persist_import=AsyncMock(side_effect=lambda _job, model: model),
+    )
+    monkeypatch.setattr(
+        "services.model_import_service.get_settings", lambda: SimpleNamespace(models_dir=optimization.models_dir)
+    )
+    imported = await importer.import_model_directory(
+        source_dir=restored_dir / "exports" if exports_root else restored_dir,
+        project_id=dataset.project_id,
+        dataset_id=dataset.id,
+        model_name="Restored INT8",
+    )
+    assert imported.optimization is not None
+    assert imported.optimization.model_dump(mode="json") == metadata
+    assert imported.available_backends == ["openvino"]
+    assert not (Path(imported.path) / "model.ckpt").exists()
+    assert (Path(imported.path) / "exports/openvino/act.bin").read_bytes() == b"INT8"
+
+
+async def test_invalid_studio_manifest_metadata_does_not_touch_original(optimization):
+    manifest_path = Path(optimization.source.path) / "exports/openvino/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["studio"] = "invalid"
+    manifest_path.write_text(json.dumps(manifest))
+    original = manifest_path.read_bytes()
+    async with optimization.sessions() as session:
+        job = await ModelOptimizationService(session).submit(optimization.source.id)
+    await make_worker(job).run_loop()
+    async with optimization.sessions() as session:
+        failed = await JobService(session).get_job_by_id(job.id)
+        assert failed.status == JobStatus.FAILED
+        assert "studio metadata must be an object" in failed.message
+    assert manifest_path.read_bytes() == original
+    assert not optimization.compressed
+    assert not (optimization.models_dir / str(job.id)).exists()
+    assert not (optimization.models_dir / f".optimize-{job.id}").exists()
+
+
+async def test_train_api_rejects_optimized_base_before_creating_job(optimization, monkeypatch):
+    async with optimization.sessions() as session:
+        job = await ModelOptimizationService(session).submit(optimization.source.id)
+    await make_worker(job).run_loop()
+    monkeypatch.setattr("services.training_targets.local.available_policy_classes", lambda: {"act": (object, [])})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/jobs:train",
+            json={
+                "training_target": "local",
+                "project_id": str(optimization.source.project_id),
+                "dataset_id": str(uuid4()),
+                "policy": "act",
+                "model_name": "Unsupported optimized retrain",
+                "base_model_id": str(job.id),
+            },
+        )
+    assert response.status_code == 409
+    assert "inference-only" in response.text
+    async with optimization.sessions() as session:
+        jobs = await JobService(session).get_job_list()
+        assert len(jobs) == 1
+        assert jobs[0].id == job.id
 
 
 @pytest.mark.parametrize("phase", ["queued", "before_compression", "during_compression", "failure"])

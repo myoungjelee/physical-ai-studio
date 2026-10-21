@@ -31,12 +31,28 @@ backend/src/
 process for each runnable training, model-optimization, or dataset-import job.
 Idle Studio instances do not run job workers. Local training and model
 optimization share one exclusive local slot; remote training reserves each
-trainer/GPU target independently. One import can run alongside them, and no
-import worker stays alive while
-waiting for user review. The scheduler reaps completed processes, reconciles
+trainer/GPU target independently. Runnable jobs are considered in submission
+order across job types, so older optimization jobs are not overtaken by newer
+local training jobs. One import can run alongside them, and no import worker
+stays alive while waiting for user review. The scheduler reaps completed processes, reconciles
 abandoned jobs, and stops active workers during application shutdown. Per-job
 multiprocessing events handle cancellation without a manager process. Shutdown
 keeps the API event loop free to drain worker events while joining processes.
+
+`services/job_handlers.py` registers one typed lifecycle handler per job type.
+Handlers define runnable eligibility, atomic claim conditions, resource keys,
+lazy worker construction, interruption, and orphan recovery. The scheduler owns
+processes and reservations without branching on job types; the repository owns
+atomic database transitions without choosing domain policy. Workers retain
+execution and transactional result publication. Training target handlers remain
+responsible for local/remote target selection within the training job handler.
+
+Every worker claims its assigned job before execution. Dataset imports can claim
+only queued detection/import steps, never upload or review waits. Generic
+`/api/jobs/{job_id}:interrupt` rejects dataset imports because their running
+workers cannot honor interruption; use the import-specific review-stage cancel
+endpoint instead. A worker exit does not imply completion: a review wait or
+remote reattachment can legitimately leave a job pending.
 
 ## Setup
 
@@ -125,6 +141,14 @@ completes; use **Run model** on either entry to choose the original or optimized
 policy. Both use the standard OpenVINO backend and support export downloads.
 The optimized entry contains inference artifacts, not a training checkpoint or
 an owned dataset snapshot, so retraining is available only on the original.
+Training submission also rejects optimized models as a base through the API.
+
+The OpenVINO manifest records provenance and compression mode under
+`studio.optimization`, a Runtime-compatible application extension. Model
+imports restore this marker, preserving the INT8 label and inference-only
+restrictions. Both an extracted optimized model download and its `exports/`
+directory can be imported without a checkpoint; unmarked full training-model
+packages still require one.
 
 Optimization runs locally, including for models trained on remote trainers.
 Its status and cancellation control appear on the source model's OpenVINO card.
