@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { toast } from '@geti-ui/ui';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 
@@ -26,6 +26,9 @@ const IDLE_ACTIONS = Array.from({ length: LENGTH }, () => [0]);
 // Suggested range for MOVING_ACTIONS: start = 2 - 1 = 1, end = 5 + 1 = 6.
 const SUGGESTED_RANGE = { start: 1, end: 6 };
 const SUGGESTED_LABEL = '1s – 6s';
+
+const TRIM_RANGE = { start: 2, end: 8 };
+const TRIM_LABEL = '2s – 8s';
 
 const getMockedPlayer = (): Player => ({
     timeRef: { current: 0 },
@@ -146,6 +149,28 @@ describe('TrimEpisodeControls', () => {
         expect(player.seek).toHaveBeenLastCalledWith(8);
     });
 
+    it('asks for confirmation with the range in seconds and does not trim when cancelled', async () => {
+        let requested = false;
+        server.use(
+            http.put(EPISODE_PATH, () => {
+                requested = true;
+                return HttpResponse.json(getMockedEpisodeDetail());
+            })
+        );
+        const { user } = renderControls({}, TRIM_RANGE);
+
+        await user.click(await screen.findByRole('button', { name: 'Trim' }));
+
+        const dialog = await screen.findByRole('alertdialog');
+        expect(within(dialog).getByText(new RegExp(`trim this episode to ${TRIM_LABEL}`))).toBeInTheDocument();
+
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+        expect(requested).toBe(false);
+        expect(toastPositive).not.toHaveBeenCalled();
+    });
+
     it('sends the current range to the backend and shows a success toast', async () => {
         let body: unknown;
         let pathParams: unknown;
@@ -156,9 +181,11 @@ describe('TrimEpisodeControls', () => {
                 return HttpResponse.json(getMockedEpisodeDetail({ length: 6 }));
             })
         );
-        const { user } = renderControls({}, { start: 2, end: 8 });
+        const { user } = renderControls({}, TRIM_RANGE);
 
         await user.click(await screen.findByRole('button', { name: 'Trim' }));
+        const dialog = await screen.findByRole('alertdialog');
+        await user.click(within(dialog).getByRole('button', { name: 'Trim' }));
 
         await waitFor(() => expect(toastPositive).toHaveBeenCalledWith('Episode trimmed.'));
         expect(body).toEqual({ start_frame: 2, end_frame: 8 });
@@ -175,9 +202,10 @@ describe('TrimEpisodeControls', () => {
                 )
             )
         );
-        const { user } = renderControls({}, { start: 2, end: 8 });
+        const { user } = renderControls({}, TRIM_RANGE);
 
         await user.click(await screen.findByRole('button', { name: 'Trim' }));
+        await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Trim' }));
 
         await waitFor(() => expect(toastNegative).toHaveBeenCalledWith('end_frame: end_frame exceeds length'));
         expect(toastPositive).not.toHaveBeenCalled();

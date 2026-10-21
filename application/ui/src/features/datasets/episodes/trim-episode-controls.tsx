@@ -1,4 +1,4 @@
-import { Button, Flex, RangeSlider, toast, View } from '@geti-ui/ui';
+import { AlertDialog, Button, DialogTrigger, Flex, RangeSlider, toast, View } from '@geti-ui/ui';
 
 import { getApiErrorMessage } from '../../../api/errors';
 import { SchemaEpisode } from '../../../api/openapi-spec';
@@ -65,14 +65,26 @@ export const TrimEpisodeControls = ({ datasetId, episode, player, range, onRange
                 <Button variant='secondary' onPress={handleSuggest}>
                     Suggest range
                 </Button>
-                <Button
-                    variant='accent'
-                    isPending={isPending}
-                    isDisabled={!canSubmitTrim(range, episode.length) || isPending}
-                    onPress={handleTrim}
-                >
-                    Trim
-                </Button>
+                <DialogTrigger>
+                    <Button
+                        variant='accent'
+                        isPending={isPending}
+                        isDisabled={!canSubmitTrim(range, episode.length) || isPending}
+                    >
+                        Trim
+                    </Button>
+                    <AlertDialog
+                        title='Trim episode'
+                        variant='warning'
+                        primaryActionLabel='Trim'
+                        cancelLabel='Cancel'
+                        isPrimaryActionDisabled={isPending}
+                        onPrimaryAction={handleTrim}
+                    >
+                        Are you sure you want to trim this episode to {formatTrimRangeLabel(range, episode.fps)}? Frames
+                        outside this range will be removed from the episode.
+                    </AlertDialog>
+                </DialogTrigger>
             </Flex>
         </>
     );
