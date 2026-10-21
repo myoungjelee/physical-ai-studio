@@ -21,6 +21,6 @@ __all__ = [
 
 
 def require_aws_feature_active() -> None:
-    """Fail closed when the unauthenticated backend is network-exposed."""
-    if not is_loopback_host(get_settings().host):
+    """Require the AWS integration to be explicitly enabled."""
+    if not get_settings().aws_enabled:
         raise AwsFeatureDisabledError

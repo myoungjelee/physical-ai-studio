@@ -555,14 +555,11 @@ class TrainerContainerLaunchError(BaseException):
 
 
 class AwsFeatureDisabledError(BaseException):
-    """Raised when the AWS provider fails closed on network exposure."""
+    """Raised when the AWS integration is disabled."""
 
     def __init__(self) -> None:
         super().__init__(
-            message=(
-                "The AWS provider is not available: the backend is bound to a non-loopback address and has no "
-                "authentication model. Bind the backend to a loopback address (127.0.0.1 or ::1) to use it."
-            ),
+            message="The AWS provider is disabled. Set AWS_ENABLED=true to enable it.",
             error_code="aws_feature_unavailable",
             http_status=http.HTTPStatus.SERVICE_UNAVAILABLE,
         )
