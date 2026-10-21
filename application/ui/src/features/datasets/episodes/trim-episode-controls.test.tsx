@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { toast } from '@geti-ui/ui';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 
@@ -26,6 +26,8 @@ const IDLE_ACTIONS = Array.from({ length: LENGTH }, () => [0]);
 // Suggested range for MOVING_ACTIONS: start = 2 - 1 = 1, end = 5 + 1 = 6.
 const SUGGESTED_RANGE = { start: 1, end: 6 };
 const SUGGESTED_LABEL = '1s – 6s';
+
+const TOOLTIP_DELAY_MS = 1500;
 
 const TRIM_RANGE = { start: 2, end: 8 };
 const TRIM_LABEL = '2s – 8s';
@@ -115,14 +117,30 @@ describe('TrimEpisodeControls', () => {
         expect(screen.getByRole('button', { name: 'Trim' })).toBeEnabled();
     });
 
-    it('explains how the range is suggested in a tooltip', async () => {
-        const { user } = renderControls();
+    describe('tooltip', () => {
+        beforeEach(() => {
+            rs.useFakeTimers({ shouldAdvanceTime: true });
+        });
 
-        await user.hover(await screen.findByRole('button', { name: 'Suggest range' }));
+        afterEach(() => {
+            rs.useRealTimers();
+        });
 
-        expect(await screen.findByRole('tooltip')).toHaveTextContent(
-            'Select frames where the robot is moving, skipping idle frames at the start and end.'
-        );
+        it('explains how the range is suggested', async () => {
+            renderControls();
+            const user = userEvent.setup({ advanceTimers: (ms) => rs.advanceTimersByTime(ms) });
+            const button = screen.getByRole('button', { name: 'Suggest range' });
+
+            await user.pointer({ target: document.body });
+            await user.hover(button);
+            expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+            await act(() => rs.advanceTimersByTime(TOOLTIP_DELAY_MS));
+
+            expect(screen.getByRole('tooltip')).toHaveTextContent(
+                'Select frames where the robot is moving, skipping idle frames at the start and end.'
+            );
+        });
     });
 
     it('shows an info toast when no idle frames are detected', async () => {
