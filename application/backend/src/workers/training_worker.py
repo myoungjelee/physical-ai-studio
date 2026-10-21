@@ -64,6 +64,8 @@ class TrainingWorker(BaseProcessWorker):
                 for job in pending_jobs:
                     payload = TrainJobPayloadAdapter.validate_python(job.payload)
                     target = self._target_key(payload)
+                    if target.startswith("batch:"):
+                        target = f"{target}:{job.id}"
                     if self._target_is_busy(target, self._active_training_tasks):
                         continue
                     task = asyncio.create_task(self._run_training_job(job, payload), name=f"training-{job.id}")
@@ -129,7 +131,7 @@ class TrainingWorker(BaseProcessWorker):
             else:
                 async with get_async_db_session_ctx() as session:
                     dataset = await DatasetService(session).get_dataset_by_id(payload.dataset_id)
-                snapshot_dir = settings.snapshot_dir / SnapshotService.generate_snapshot_folder_name()
+                snapshot_dir = settings.snapshot_dir / f"{SnapshotService.generate_snapshot_folder_name()}_{job.id}"
                 async with get_async_db_session_ctx() as session:
                     snapshot = await SnapshotService(session).create_snapshot_for_dataset(
                         dataset, destination=snapshot_dir

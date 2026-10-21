@@ -1,7 +1,7 @@
 import { Badge, Button, Grid, Heading, StatusLight, Text, View } from '@geti-ui/ui';
 
 import { SchemaRemoteTrainer, SchemaRemoteTrainerHealth } from '../../../../api/openapi-spec';
-import { connectionModeLabel, sshHostDisplay } from '../../remote-trainer-connection-utils';
+import { configuredCapacity, connectionModeLabel, sshHostDisplay } from '../../remote-trainer-connection-utils';
 import {
     capabilityDetail,
     CheckState,
@@ -110,10 +110,10 @@ export const RemoteTrainerDetail = ({ remoteTrainer, health, isChecking }: Remot
                             status={deviceReportIsInvalid ? 'Healthy' : healthLabel(health, isChecking)}
                         />
                         <HealthCheckRow
-                            label={batchConnection ? 'Provisioned compute' : 'Compute capability'}
+                            label={batchConnection ? 'Configured pool capacity' : 'Compute capability'}
                             detail={
                                 batchConnection
-                                    ? `${Object.keys(batchConnection.targets).join(', ')} · allocated per job`
+                                    ? configuredCapacity(remoteTrainer)
                                     : capabilityDetail(health, isChecking)
                             }
                             state={batchConnection ? 'neutral' : capabilityState}

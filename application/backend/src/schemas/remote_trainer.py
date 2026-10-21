@@ -98,6 +98,9 @@ class AwsBatchTarget(BaseModel):
 
     queue: str = Field(min_length=1, max_length=2048)
     job_definition: str = Field(min_length=1, max_length=2048)
+    max_trainers: int | None = Field(
+        default=None, gt=0, description="Configured maximum concurrent trainers in this pool."
+    )
 
 
 class AwsBatchProviderConfiguration(AwsCredentialSelection):

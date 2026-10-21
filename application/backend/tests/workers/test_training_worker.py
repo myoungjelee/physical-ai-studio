@@ -105,6 +105,7 @@ def _make_settings(tmp_path: Path) -> MagicMock:
     settings = MagicMock()
     settings.models_dir = tmp_path / "models"
     settings.cache_dir = tmp_path / "cache"
+    settings.snapshot_dir = tmp_path / "snapshots"
     return settings
 
 
@@ -522,6 +523,9 @@ class TestTraining:
 
             await worker._run_training_job(job, payload)
 
+        MockSnapshotService.return_value.create_snapshot_for_dataset.assert_awaited_once_with(
+            dataset, destination=tmp_path / "snapshots" / f"snap_{job.id}"
+        )
         assert captured["model"].properties == {
             "lora_enabled": lora_enabled,
             "lora_use_dora": lora_use_dora,
@@ -606,6 +610,49 @@ class TestSetupRecovery:
 
 
 class TestTrainingScheduling:
+    @pytest.mark.anyio
+    async def test_releasing_batch_job_preserves_other_job_tracking_and_cancel_flag(self, worker) -> None:
+        first_id, second_id = uuid4(), uuid4()
+        first, second = asyncio.create_task(asyncio.sleep(0)), asyncio.create_task(asyncio.sleep(0))
+        first_key, second_key = f"batch:trainer:act:{first_id}", f"batch:trainer:act:{second_id}"
+        worker._active_training_tasks = {first_key: first, second_key: second}
+        worker.job_interrupt_flags.update({str(first_id): True, str(second_id): True})
+        await first
+
+        worker._release_target(first_key, first_id, first)
+
+        assert worker._active_training_tasks == {second_key: second}
+        assert dict(worker.job_interrupt_flags) == {str(second_id): True}
+        await second
+
+    @pytest.mark.anyio
+    async def test_same_policy_batch_jobs_start_independently_without_duplicate_starts(self, worker) -> None:
+        payload = _make_remote_payload()
+        payload.remote_trainer_url = "aws-batch://us-east-1/jobs-bucket"
+        jobs = [_make_job(payload), _make_job(payload)]
+        worker._active_training_tasks = {}
+        worker.should_stop = MagicMock(side_effect=[False, True])
+        worker.stop_aware_sleep = MagicMock()
+        tracked = {}
+
+        async def run_job(job, _payload) -> None:
+            tracked.update(worker._active_training_tasks)
+            worker.job_interrupt_flags[str(job.id)] = True
+            await asyncio.sleep(0)
+
+        with (
+            patch(f"{MODULE}.JobService.get_pending_train_jobs", AsyncMock(return_value=[*jobs, jobs[0]])),
+            patch.object(worker, "_run_training_job", side_effect=run_job) as run,
+        ):
+            await worker.run_loop()
+            await asyncio.sleep(0)
+
+        assert run.await_count == 2
+        assert len(tracked) == 2
+        assert all(str(job.id) in key for job, key in zip(jobs, tracked, strict=True))
+        assert worker._active_training_tasks == {}
+        assert not worker.job_interrupt_flags
+
     @pytest.mark.anyio
     async def test_jobs_on_distinct_targets_start_without_waiting(self, worker) -> None:
         """A local job and jobs on separate remote trainers run concurrently."""

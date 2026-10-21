@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from schemas.remote_trainer import (
     AwsBatchConnection,
+    AwsBatchTarget,
     DirectConnection,
     ManualSshConnection,
     RemoteTrainer,
@@ -86,6 +87,19 @@ def test_aws_batch_connection_parses_cloudformation_output() -> None:
 
     assert isinstance(config.connection, AwsBatchConnection)
     assert config.connection.targets["g4dn.xlarge"].queue == "arn:aws:batch:q"
+    assert config.connection.targets["g4dn.xlarge"].max_trainers is None
+
+
+@pytest.mark.parametrize("capacity", [1, 4, 16])
+def test_batch_target_accepts_configured_capacity(capacity: int) -> None:
+    target = AwsBatchTarget(queue="queue", job_definition="definition", max_trainers=capacity)
+    assert target.max_trainers == capacity
+
+
+@pytest.mark.parametrize("capacity", [0, -1, 1.5])
+def test_batch_target_rejects_invalid_capacity(capacity: float) -> None:
+    with pytest.raises(ValidationError):
+        AwsBatchTarget.model_validate({"queue": "queue", "job_definition": "definition", "max_trainers": capacity})
 
 
 def test_aws_batch_connection_requires_at_least_one_target() -> None:

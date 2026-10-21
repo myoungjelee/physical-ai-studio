@@ -22,9 +22,13 @@ def test_template_configuration_matches_resource_schema() -> None:
     template = _template()
     configuration = template["Resources"]["EmptyJobsBucket"]["Properties"]["Configuration"]
     configuration["schema_version"] = int(configuration["schema_version"])
+    for target in configuration["targets"].values():
+        assert target["max_trainers"] == "ParallelTrainersPerPool"
+        target["max_trainers"] = template["Parameters"]["ParallelTrainersPerPool"]["Default"]
     parsed = AwsBatchResourceConfiguration.model_validate(configuration)
     assert set(parsed.targets) == {"g4dn.2xlarge", "g6e.2xlarge", "g7e.8xlarge"}
     assert parsed.region == "AWS::Region"
+    assert all(target.max_trainers == 1 for target in parsed.targets.values())
     assert template["Rules"]["SupportedRegion"]["Assertions"][0]["Assert"] == {
         "Fn::Equals": [{"Ref": "AWS::Region"}, "us-east-1"]
     }
@@ -99,8 +103,7 @@ def test_job_prefix_parameter_reaches_trainer(definition: str, prefix: str, tmp_
 
 def test_job_definitions_keep_resource_limits_and_use_defaults() -> None:
     template = _template()
-    assert set(template["Parameters"]) == {"JobTimeoutSeconds"}
-    assert "Mappings" not in template
+    assert set(template["Parameters"]) == {"JobTimeoutSeconds", "ParallelTrainersPerPool"}
     assert template["Resources"]["TrainerLogGroup"]["Properties"]["RetentionInDays"] == "14"
     for definition, vcpus, memory in [
         ("G4dnJobDefinition", "4", "14000"),
@@ -123,6 +126,20 @@ def test_job_definitions_keep_resource_limits_and_use_defaults() -> None:
         }
 
 
+def test_parallel_trainers_sets_each_pool_capacity() -> None:
+    template = _template()
+    parameter = template["Parameters"]["ParallelTrainersPerPool"]
+    assert parameter["Default"] == "1"
+    assert parameter["AllowedValues"] == [str(count) for count in range(1, 17)]
+    for pool, size, vcpus in [("G4dn", "Small", 8), ("G6e", "Small", 8), ("G7e", "Large", 32)]:
+        resources = template["Resources"][f"{pool}ComputeEnvironment"]["Properties"]["ComputeResources"]
+        assert resources["MaxvCpus"] == ["PoolCapacity", "ParallelTrainersPerPool", size]
+        assert resources["MinvCpus"] == resources["DesiredvCpus"] == "0"
+        assert resources["AllocationStrategy"] == "BEST_FIT"
+        for count in parameter["AllowedValues"]:
+            assert int(template["Mappings"]["PoolCapacity"][count][size]) == int(count) * vcpus
+
+
 @pytest.mark.parametrize(
     ("role", "prefixes"),
     [("StudioRole", ["jobs/*", "validation/*"]), ("BatchJobRole", "jobs/*")],
@@ -143,6 +160,8 @@ def test_bucket_location_permission_has_no_prefix_condition(role: str, prefixes:
 def test_template_publishes_configuration_and_cleans_bucket(request_type: str) -> None:
     template = _template()
     properties = template["Resources"]["EmptyJobsBucket"]["Properties"]
+    for target in properties["Configuration"]["targets"].values():
+        target["max_trainers"] = "4"
     code = template["Resources"]["BucketCleanupFunction"]["Properties"]["Code"]["ZipFile"]
     boto = MagicMock()
     response = MagicMock()
@@ -165,4 +184,5 @@ def test_template_publishes_configuration_and_cleans_bucket(request_type: str) -
         assert arguments["Key"] == "studio-config.json"
         payload = json.loads(arguments["Body"])
         assert payload["schema_version"] == 1
+        assert all(target["max_trainers"] == 4 for target in payload["targets"].values())
         AwsBatchResourceConfiguration.model_validate(payload)
