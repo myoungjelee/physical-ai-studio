@@ -1,5 +1,3 @@
-import { useState } from 'react';
-
 import { toast } from '@geti-ui/ui';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -10,8 +8,7 @@ import { http } from '../../../api/utils';
 import { server } from '../../../msw-node-setup';
 import { getMockedEpisodeDetail } from '../../../test-utils/mocks/mock-episode';
 import { render } from '../../../test-utils/render';
-import { TrimEpisodeControls } from './trim-episode-controls';
-import { getFullTrimRange, TrimRange } from './trim-range';
+import { TrimTimeline } from './trim-timeline';
 import { Player, PlayState } from './use-player';
 
 const DATASET_ID = 'dataset-1';
@@ -29,9 +26,6 @@ const SUGGESTED_LABEL = '1s – 6s';
 
 const TOOLTIP_DELAY_MS = 1500;
 
-const TRIM_RANGE = { start: 2, end: 8 };
-const TRIM_LABEL = '2s – 8s';
-
 const getMockedPlayer = (): Player => ({
     timeRef: { current: 0 },
     duration: LENGTH / FPS,
@@ -45,27 +39,7 @@ const getMockedPlayer = (): Player => ({
     seek: rs.fn(),
 });
 
-interface HarnessProps {
-    episode: SchemaEpisode;
-    player: Player;
-    initialRange?: TrimRange;
-}
-
-const Harness = ({ episode, player, initialRange }: HarnessProps) => {
-    const [range, setRange] = useState<TrimRange>(initialRange ?? getFullTrimRange(episode.length));
-
-    return (
-        <TrimEpisodeControls
-            datasetId={DATASET_ID}
-            episode={episode}
-            player={player}
-            range={range}
-            onRangeChange={setRange}
-        />
-    );
-};
-
-const renderControls = (episodeOverrides: Partial<SchemaEpisode> = {}, initialRange?: TrimRange) => {
+const renderTimeline = (episodeOverrides: Partial<SchemaEpisode> = {}) => {
     const episode = getMockedEpisodeDetail({
         length: LENGTH,
         fps: FPS,
@@ -75,12 +49,12 @@ const renderControls = (episodeOverrides: Partial<SchemaEpisode> = {}, initialRa
     const player = getMockedPlayer();
     const user = userEvent.setup();
 
-    render(<Harness episode={episode} player={player} initialRange={initialRange} />);
+    render(<TrimTimeline datasetId={DATASET_ID} episode={episode} player={player} />);
 
     return { episode, player, user };
 };
 
-describe('TrimEpisodeControls', () => {
+describe('TrimTimeline', () => {
     let toastInfo: ReturnType<typeof rs.spyOn>;
     let toastPositive: ReturnType<typeof rs.spyOn>;
     let toastNegative: ReturnType<typeof rs.spyOn>;
@@ -98,22 +72,18 @@ describe('TrimEpisodeControls', () => {
     });
 
     it('disables Trim for the full range', async () => {
-        renderControls();
+        renderTimeline();
 
         expect(await screen.findByRole('button', { name: 'Trim' })).toBeDisabled();
+        expect(screen.getByText(/keep 0–10 · 10\/10 frames/)).toBeInTheDocument();
     });
 
-    it('applies the suggested range to the slider and enables Trim', async () => {
-        const { user } = renderControls();
-        const [startThumb, endThumb] = await screen.findAllByRole('slider');
-        expect(startThumb).toHaveValue('0');
-        expect(endThumb).toHaveValue(String(LENGTH));
+    it('applies the suggested range and enables Trim', async () => {
+        const { user } = renderTimeline();
 
-        await user.click(screen.getByRole('button', { name: 'Suggest range' }));
+        await user.click(await screen.findByRole('button', { name: 'Suggest range' }));
 
-        expect(startThumb).toHaveValue(String(SUGGESTED_RANGE.start));
-        expect(endThumb).toHaveValue(String(SUGGESTED_RANGE.end));
-        expect(screen.getByText(SUGGESTED_LABEL)).toBeInTheDocument();
+        expect(screen.getByText(/keep 1–6 · 5\/10 frames/)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Trim' })).toBeEnabled();
     });
 
@@ -127,7 +97,7 @@ describe('TrimEpisodeControls', () => {
         });
 
         it('explains how the range is suggested', async () => {
-            renderControls();
+            renderTimeline();
             const user = userEvent.setup({ advanceTimers: (ms) => rs.advanceTimersByTime(ms) });
             const button = screen.getByRole('button', { name: 'Suggest range' });
 
@@ -144,7 +114,7 @@ describe('TrimEpisodeControls', () => {
     });
 
     it('shows an info toast when no idle frames are detected', async () => {
-        const { user } = renderControls({ actions: IDLE_ACTIONS });
+        const { user } = renderTimeline({ actions: IDLE_ACTIONS });
 
         await user.click(await screen.findByRole('button', { name: 'Suggest range' }));
 
@@ -152,29 +122,53 @@ describe('TrimEpisodeControls', () => {
         expect(screen.getByRole('button', { name: 'Trim' })).toBeDisabled();
     });
 
-    it('pauses and seeks to the start frame when the start thumb is moved with the keyboard', async () => {
-        const { player, user } = renderControls();
+    it('sets the in and out points at the playhead and restores the full range', async () => {
+        const { player, user } = renderTimeline();
+        player.timeRef.current = 3;
 
-        const [startThumb] = await screen.findAllByRole('slider');
-        startThumb.focus();
-        await user.keyboard('{ArrowRight}');
+        await user.click(await screen.findByRole('button', { name: '[ In' }));
+        expect(screen.getByText(/keep 3–10/)).toBeInTheDocument();
 
-        expect(player.pause).toHaveBeenCalled();
-        expect(player.seek).toHaveBeenCalledWith(1);
+        await user.click(screen.getByRole('button', { name: 'Out ]' }));
+        expect(screen.getByText(/keep 3–5/)).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Full' }));
+        expect(screen.getByText(/keep 0–10/)).toBeInTheDocument();
     });
 
-    it('seeks to the end frame only when the end thumb is moved', async () => {
-        const { player, user } = renderControls();
+    describe('keyboard shortcuts', () => {
+        it('plays and pauses with space', async () => {
+            const { player, user } = renderTimeline();
+            await screen.findByRole('button', { name: 'Trim' });
 
-        const [startThumb, endThumb] = await screen.findAllByRole('slider');
-        startThumb.focus();
-        await user.keyboard('{ArrowRight}{ArrowLeft}');
-        expect(player.seek).not.toHaveBeenCalledWith(LENGTH - 1);
+            await user.keyboard(' ');
 
-        // End is exclusive: moving it from 10 to 9 makes frame 8 the last kept frame.
-        endThumb.focus();
-        await user.keyboard('{ArrowLeft}');
-        expect(player.seek).toHaveBeenLastCalledWith(8);
+            expect(player.play).toHaveBeenCalled();
+        });
+
+        it('steps a frame with . and ,', async () => {
+            const { player, user } = renderTimeline();
+            await screen.findByRole('button', { name: 'Trim' });
+
+            await user.keyboard('.');
+            expect(player.pause).toHaveBeenCalled();
+            expect(player.seek).toHaveBeenLastCalledWith(1);
+        });
+
+        it('sets the in and out points with [ and ]', async () => {
+            const { player, user } = renderTimeline();
+            player.timeRef.current = 3;
+            await screen.findByRole('button', { name: 'Trim' });
+
+            await user.keyboard('[[');
+            expect(screen.getByText(/keep 3–10/)).toBeInTheDocument();
+
+            await user.keyboard(']]');
+            expect(screen.getByText(/keep 3–5/)).toBeInTheDocument();
+
+            await user.keyboard('\\');
+            expect(screen.getByText(/keep 0–10/)).toBeInTheDocument();
+        });
     });
 
     it('asks for confirmation with the range in seconds and does not trim when cancelled', async () => {
@@ -185,12 +179,13 @@ describe('TrimEpisodeControls', () => {
                 return HttpResponse.json(getMockedEpisodeDetail());
             })
         );
-        const { user } = renderControls({}, TRIM_RANGE);
+        const { user } = renderTimeline();
+        await user.click(await screen.findByRole('button', { name: 'Suggest range' }));
 
-        await user.click(await screen.findByRole('button', { name: 'Trim' }));
+        await user.click(screen.getByRole('button', { name: 'Trim' }));
 
         const dialog = await screen.findByRole('alertdialog');
-        expect(within(dialog).getByText(new RegExp(`trim this episode to ${TRIM_LABEL}`))).toBeInTheDocument();
+        expect(within(dialog).getByText(new RegExp(`trim this episode to ${SUGGESTED_LABEL}`))).toBeInTheDocument();
 
         await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
@@ -206,17 +201,18 @@ describe('TrimEpisodeControls', () => {
             http.put(EPISODE_PATH, async ({ request, params }) => {
                 body = await request.json();
                 pathParams = params;
-                return HttpResponse.json(getMockedEpisodeDetail({ length: 6 }));
+                return HttpResponse.json(getMockedEpisodeDetail({ length: 5 }));
             })
         );
-        const { user } = renderControls({}, TRIM_RANGE);
+        const { user } = renderTimeline();
+        await user.click(await screen.findByRole('button', { name: 'Suggest range' }));
 
-        await user.click(await screen.findByRole('button', { name: 'Trim' }));
+        await user.click(screen.getByRole('button', { name: 'Trim' }));
         const dialog = await screen.findByRole('alertdialog');
         await user.click(within(dialog).getByRole('button', { name: 'Trim' }));
 
         await waitFor(() => expect(toastPositive).toHaveBeenCalledWith('Episode trimmed.'));
-        expect(body).toEqual({ start_frame: 2, end_frame: 8 });
+        expect(body).toEqual({ start_frame: SUGGESTED_RANGE.start, end_frame: SUGGESTED_RANGE.end });
         expect(pathParams).toEqual({ dataset_id: DATASET_ID, episode_index: '0' });
         expect(toastNegative).not.toHaveBeenCalled();
     });
@@ -230,9 +226,10 @@ describe('TrimEpisodeControls', () => {
                 )
             )
         );
-        const { user } = renderControls({}, TRIM_RANGE);
+        const { user } = renderTimeline();
+        await user.click(await screen.findByRole('button', { name: 'Suggest range' }));
 
-        await user.click(await screen.findByRole('button', { name: 'Trim' }));
+        await user.click(screen.getByRole('button', { name: 'Trim' }));
         await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Trim' }));
 
         await waitFor(() => expect(toastNegative).toHaveBeenCalledWith('end_frame: end_frame exceeds length'));

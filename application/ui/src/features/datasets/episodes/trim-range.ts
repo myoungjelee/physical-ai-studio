@@ -50,3 +50,25 @@ export const suggestTrimRange = (actions: number[][], actionKeys: string[], fps:
 
     return end - start >= MIN_TRIM_FRAMES ? { start, end } : undefined;
 };
+
+export const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+/** Moves the first kept frame, keeping at least `MIN_TRIM_FRAMES` frames. */
+export const withTrimStart = (range: TrimRange, frame: number): TrimRange => ({
+    start: clamp(frame, 0, range.end - MIN_TRIM_FRAMES),
+    end: range.end,
+});
+
+/** Moves the exclusive end of the range, keeping at least `MIN_TRIM_FRAMES` frames. */
+export const withTrimEnd = (range: TrimRange, frame: number, length: number): TrimRange => ({
+    start: range.start,
+    end: clamp(frame, range.start + MIN_TRIM_FRAMES, length),
+});
+
+// Absorbs floating-point error (e.g. 0.29 * 100 = 28.999999999999996) so a time that was
+// computed as `frame / fps` maps back to that same frame instead of the previous one.
+const FRAME_EPSILON = 1e-6;
+
+/** Index of the frame shown at `time` seconds. */
+export const getFrameAt = (time: number, fps: number, length: number): number =>
+    clamp(Math.floor(time * fps + FRAME_EPSILON), 0, length - 1);

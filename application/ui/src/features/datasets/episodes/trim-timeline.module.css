@@ -1,0 +1,208 @@
+.root {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-top: var(--spectrum-global-dimension-size-100);
+    padding: 8px 10px 10px;
+    border: 1px solid var(--spectrum-global-color-gray-200);
+    border-radius: var(--spectrum-global-dimension-size-50);
+    background-color: var(--spectrum-global-color-gray-75);
+    user-select: none;
+}
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.spacer {
+    flex: 1;
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: var(--spectrum-global-color-gray-700);
+    white-space: nowrap;
+}
+
+.removed {
+    color: #f5a524;
+}
+
+.legend {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 12px;
+    color: var(--spectrum-global-color-gray-700);
+}
+
+.legendItem {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    text-transform: lowercase;
+}
+
+.legendItem i,
+.tooltipRow i {
+    display: inline-block;
+    width: 10px;
+    height: 3px;
+    border-radius: 2px;
+}
+
+.hint {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--spectrum-global-color-gray-500);
+}
+
+.tracks {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.filmstrip {
+    display: flex;
+    height: 48px;
+    overflow: hidden;
+    background: #000;
+}
+
+.filmstrip img {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+}
+
+.ruler {
+    position: relative;
+    height: 16px;
+    font-size: 10px;
+    color: var(--spectrum-global-color-gray-600);
+    border-bottom: 1px solid var(--spectrum-global-color-gray-300);
+}
+
+.ruler span {
+    position: absolute;
+    top: 2px;
+    padding-left: 3px;
+    border-left: 1px solid var(--spectrum-global-color-gray-400);
+    line-height: 12px;
+}
+
+.track {
+    position: relative;
+    border-bottom: 1px solid var(--spectrum-global-color-gray-200);
+}
+
+.trackLabel {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    font-size: 10px;
+    color: var(--spectrum-global-color-gray-600);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.trackSvg {
+    position: absolute;
+    inset: 14px 0 4px 0;
+    width: 100%;
+    height: calc(100% - 18px);
+    pointer-events: none;
+}
+
+.dim {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.62);
+    pointer-events: none;
+}
+
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 2px solid #fff;
+    pointer-events: none;
+}
+
+.hoverLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px dashed #5ac3f8;
+    pointer-events: none;
+}
+
+.tooltip {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    min-width: 150px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: rgba(20, 22, 28, 0.95);
+    border: 1px solid var(--spectrum-global-color-gray-300);
+    font-size: 11px;
+    z-index: 3;
+}
+
+.tooltipRow {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    align-items: center;
+    gap: 4px;
+}
+
+.handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 14px;
+    margin-left: -7px;
+    cursor: ew-resize;
+    z-index: 2;
+    display: flex;
+    justify-content: center;
+}
+
+.handle::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 6px;
+    border-left: 2px solid #f5a524;
+}
+
+.knob {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 8px;
+    height: 26px;
+    border-radius: 3px;
+    background: #f5a524;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+.handle[data-active='true']::before,
+.handle:hover::before {
+    border-left-width: 3px;
+}

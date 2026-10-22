@@ -3,11 +3,15 @@ import { describe, expect, it } from '@rstest/core';
 import {
     canSubmitTrim,
     formatTrimRangeLabel,
+    getFrameAt,
     getFullTrimRange,
     isFullTrimRange,
+    MIN_TRIM_FRAMES,
     MOTION_PADDING_SECONDS,
     MOTION_THRESHOLD,
     suggestTrimRange,
+    withTrimEnd,
+    withTrimStart,
 } from './trim-range';
 
 const FPS = 30;
@@ -117,5 +121,30 @@ describe('suggestTrimRange', () => {
         const actions = buildActions(100, { 50: MOTION_THRESHOLD + 0.01 });
 
         expect(suggestTrimRange(actions, KEYS, FPS)).toEqual({ start: 50 - 1 - PAD, end: 50 + 1 + PAD });
+    });
+});
+
+describe('withTrimStart / withTrimEnd', () => {
+    it('moves the start within bounds', () => {
+        expect(withTrimStart({ start: 0, end: 10 }, 4)).toEqual({ start: 4, end: 10 });
+        expect(withTrimStart({ start: 0, end: 10 }, -3)).toEqual({ start: 0, end: 10 });
+    });
+
+    it('keeps at least MIN_TRIM_FRAMES frames', () => {
+        expect(withTrimStart({ start: 0, end: 10 }, 50)).toEqual({ start: 10 - MIN_TRIM_FRAMES, end: 10 });
+        expect(withTrimEnd({ start: 4, end: 10 }, 0, 10)).toEqual({ start: 4, end: 4 + MIN_TRIM_FRAMES });
+    });
+
+    it('moves the end within bounds', () => {
+        expect(withTrimEnd({ start: 0, end: 10 }, 6, 10)).toEqual({ start: 0, end: 6 });
+        expect(withTrimEnd({ start: 0, end: 5 }, 50, 10)).toEqual({ start: 0, end: 10 });
+    });
+});
+
+describe('getFrameAt', () => {
+    it('maps seconds to a clamped frame index', () => {
+        expect(getFrameAt(0.5, 30, 100)).toBe(15);
+        expect(getFrameAt(-1, 30, 100)).toBe(0);
+        expect(getFrameAt(99, 30, 100)).toBe(99);
     });
 });
