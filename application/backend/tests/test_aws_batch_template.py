@@ -18,21 +18,41 @@ def _template() -> dict:
     return yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
 
+def _resolved_configuration(template: dict) -> dict:
+    references = {
+        "AWS::Region": "us-east-1",
+        "StudioRole.Arn": "arn:aws:iam::123456789012:role/studio",
+        "JobsBucket": "jobs-bucket",
+        "ParallelTrainersPerPool": template["Parameters"]["ParallelTrainersPerPool"]["Default"],
+    }
+    for name, resource in template["Resources"].items():
+        if resource["Type"] == "AWS::Batch::JobQueue":
+            references[name] = f"arn:aws:batch:us-east-1:123456789012:job-queue/{name}"
+        elif resource["Type"] == "AWS::Batch::JobDefinition":
+            references[name] = f"arn:aws:batch:us-east-1:123456789012:job-definition/{name}:1"
+    configuration = template["Resources"]["EmptyJobsBucket"]["Properties"]["Configuration"]
+    return {
+        "schema_version": int(configuration["schema_version"]),
+        **{field: references[configuration[field]] for field in ("region", "studio_role_arn", "bucket")},
+        "targets": {
+            instance_type: {field: references[value] for field, value in target.items()}
+            for instance_type, target in configuration["targets"].items()
+        },
+    }
+
+
 def test_template_configuration_matches_resource_schema() -> None:
     template = _template()
-    configuration = template["Resources"]["EmptyJobsBucket"]["Properties"]["Configuration"]
-    configuration["schema_version"] = int(configuration["schema_version"])
-    for target in configuration["targets"].values():
+    for target in template["Resources"]["EmptyJobsBucket"]["Properties"]["Configuration"]["targets"].values():
         assert target["max_trainers"] == "ParallelTrainersPerPool"
-        target["max_trainers"] = template["Parameters"]["ParallelTrainersPerPool"]["Default"]
-    parsed = AwsBatchResourceConfiguration.model_validate(configuration)
+    parsed = AwsBatchResourceConfiguration.model_validate(_resolved_configuration(template))
     assert set(parsed.targets) == {"g4dn.2xlarge", "g6e.2xlarge", "g7e.8xlarge"}
-    assert parsed.region == "AWS::Region"
+    assert parsed.region == "us-east-1"
     assert all(target.max_trainers == 1 for target in parsed.targets.values())
     assert template["Rules"]["SupportedRegion"]["Assertions"][0]["Assert"] == {
         "Fn::Equals": [{"Ref": "AWS::Region"}, "us-east-1"]
     }
-    assert parsed.studio_role_arn == "StudioRole.Arn"
+    assert parsed.studio_role_arn == "arn:aws:iam::123456789012:role/studio"
     assert set(template["Outputs"]) == {"ConfigurationUri"}
 
 
@@ -160,6 +180,7 @@ def test_bucket_location_permission_has_no_prefix_condition(role: str, prefixes:
 def test_template_publishes_configuration_and_cleans_bucket(request_type: str) -> None:
     template = _template()
     properties = template["Resources"]["EmptyJobsBucket"]["Properties"]
+    properties["Configuration"] = _resolved_configuration(template)
     for target in properties["Configuration"]["targets"].values():
         target["max_trainers"] = "4"
     code = template["Resources"]["BucketCleanupFunction"]["Properties"]["Code"]["ZipFile"]

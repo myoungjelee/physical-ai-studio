@@ -8,19 +8,21 @@ from sse_starlette import EventSourceResponse
 
 from api.dependencies import get_event_processor_ws, get_job_service, get_model_metrics_service, get_scheduler
 from core.scheduler import Scheduler
+from core.security import require_aws_feature_active
 from exceptions import InvalidJobStateError, ResourceNotFoundError, ResourceType
 from schemas import Job
-from schemas.aws_auth import AwsAuthenticationIssue
 from schemas.base_job import JobStatus
 from schemas.job import RemoteTrainJobPayload, TrainJob, TrainJobPayload
+from schemas.job_response import JobResponse, job_response
+from schemas.operational_issue import OperationalIssue
 from services import JobService, ModelMetricsService
-from services.aws_auth_service import AwsAuthenticationRequiredError
+from services.aws_auth_service import AwsAuthenticationRequiredError, operational_authentication_issue
 from services.event_processor import EventProcessor, EventType
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
 
 
-@router.get("")
+@router.get("", response_model=list[JobResponse])
 async def list_jobs(
     job_service: Annotated[JobService, Depends(get_job_service)],
 ) -> list[Job]:
@@ -28,7 +30,7 @@ async def list_jobs(
     return await job_service.get_job_list()
 
 
-@router.get("/{job_id}")
+@router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: UUID,
     job_service: Annotated[JobService, Depends(get_job_service)],
@@ -46,7 +48,7 @@ async def delete_job(
     await job_service.delete_job(job_id)
 
 
-@router.post(":train", response_model=Job, responses={400: {"model": AwsAuthenticationIssue}})
+@router.post(":train", response_model=JobResponse, responses={400: {"model": OperationalIssue}})
 async def submit_train_job(
     job_service: Annotated[JobService, Depends(get_job_service)],
     payload: Annotated[TrainJobPayload, Body()],
@@ -55,7 +57,7 @@ async def submit_train_job(
     try:
         return await job_service.submit_train_job(payload=payload)
     except AwsAuthenticationRequiredError as error:
-        return JSONResponse(status_code=400, content=error.issue.model_dump())
+        return JSONResponse(status_code=400, content=operational_authentication_issue(error.issue).model_dump())
 
 
 @router.post("/{job_id}:interrupt")
@@ -76,30 +78,22 @@ async def interrupt_job(
         and job.payload.remote_trainer_url
         and job.payload.remote_trainer_url.startswith("aws-batch://")
     ):
+        require_aws_feature_active()
         await job_service.update_remote_job_state(job_id, cancel_requested=True)
         if job.payload.remote_job_id is not None or job.status == JobStatus.RUNNING:
-            scheduler.job_interrupt_flags[str(job_id)] = True
+            scheduler.cancel_job(job_id)
             return
 
-    if isinstance(job, TrainJob):
-        if job.status == JobStatus.PENDING:
-            if await job_service.transition_pending_train_job(job_id, JobStatus.CANCELED):
-                if isinstance(job.payload, RemoteTrainJobPayload) and job.payload.remote_job_id:
-                    from services.training_backends.remote import RemoteTrainingBackend
-
-                    if job.payload.remote_trainer_url:
-                        await RemoteTrainingBackend(job.payload.remote_trainer_url).cancel(job.payload.remote_job_id)
-                return
-            job = await job_service.get_job_by_id(job_id)
-        if job.status == JobStatus.RUNNING:
-            # Keep the job RUNNING until the worker has stopped and flushed progress.
-            # Otherwise Delete can remove it while the worker still owns it.
-            scheduler.job_interrupt_flags[str(job_id)] = True
-            return
     if job.status == JobStatus.CANCELED:
         return
     if job.status in {JobStatus.COMPLETED, JobStatus.FAILED}:
         raise InvalidJobStateError("Cannot stop a finished job")
+    if isinstance(job, TrainJob):
+        # Claiming and queued cancellation compete atomically. Once claimed,
+        # keep RUNNING until the worker releases its files and flushes progress.
+        if await job_service.cancel_pending_train_job(job_id) is None:
+            scheduler.cancel_job(job_id)
+        return
     await job_service.update_job_status(job_id, status=JobStatus.CANCELED)
 
 
@@ -109,7 +103,7 @@ async def get_model_job_metrics(
     job_service: Annotated[JobService, Depends(get_job_service)],
     model_metrics_service: Annotated[ModelMetricsService, Depends(get_model_metrics_service)],
 ) -> EventSourceResponse:
-    """Get model running metrics if job is a model job"""
+    """Stream metric rows and named ``issues`` events containing OperationalIssue arrays."""
     job = await job_service.get_job_by_id(job_id)
     metrics_path = await model_metrics_service.get_model_job_metrics_path(job)
     if metrics_path.exists():
@@ -120,6 +114,7 @@ async def get_model_job_metrics(
         and job.payload.remote_trainer_url is not None
         and job.payload.remote_trainer_url.startswith("aws-batch://")
     ):
+        require_aws_feature_active()
         return EventSourceResponse(
             model_metrics_service.tail_batch_csv_file(job.payload.remote_trainer_url, str(job.id))
         )
@@ -155,7 +150,7 @@ async def jobs_websocket(
         await websocket.send_json(
             {
                 "event": event,
-                "data": payload.model_dump(mode="json"),
+                "data": job_response(payload).model_dump(mode="json"),
             }
         )
 

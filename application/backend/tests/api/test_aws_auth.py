@@ -69,7 +69,7 @@ def test_sso_error_contains_structured_recovery_in_both_flows(endpoint: str) -> 
     with patch(target, side_effect=SSOTokenLoadError(error_msg="private")):
         response = client.post(f"{BASE}/{endpoint}", json=body)
     assert response.status_code == 400
-    assert response.json()["code"] == "aws_credentials_expired"
-    assert response.json()["command"] == "aws sso login '--profile=team studio'"
+    assert response.json()["id"]
+    assert response.json()["copy_text"] == "aws sso login '--profile=team studio'"
     assert "team studio" in response.json()["detail"]
     assert "private" not in response.text

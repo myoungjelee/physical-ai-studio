@@ -5,11 +5,12 @@ import { toast } from '@geti-ui/ui';
 import { rs } from '@rstest/core';
 import { act, waitFor } from '@testing-library/react';
 
+import { issueToasts } from '../../components/notification/issue-toasts';
 import { createQueryClient } from '../../query-client/query-client';
 import { getMockedDatasetImportJob } from '../../test-utils/mocks/mock-dataset-import-job';
+import { getMockedOperationalIssue } from '../../test-utils/mocks/mock-operational-issue';
 import { getMockedTrainJob } from '../../test-utils/mocks/mock-train-job';
 import { renderHook } from '../../test-utils/render';
-import { clearAwsAuthentication } from '../training-targets/training-target-form/aws-error-alert';
 import { JOBS_QUERY_KEY, SchemaJob } from './use-job-cache';
 import { useJobUpdates } from './use-job-updates';
 
@@ -47,28 +48,22 @@ describe('useJobUpdates', () => {
         const negative = rs.spyOn(toast, 'negative').mockReturnValue(close);
         const queryClient = createQueryClient();
         const job = getMockedTrainJob({ status: 'running' });
-        const issue = {
-            profile_name: 'global-studio',
-            code: 'aws_credentials_expired',
-            title: 'Expired',
-            detail: 'Renew global-studio',
-            command: 'aws sso login --profile=global-studio',
-        };
+        const issue = getMockedOperationalIssue();
         const waiting = {
             ...job,
+            issues: [issue],
             payload: {
                 ...job.payload,
                 training_target: 'remote' as const,
                 remote_trainer_id: 'trainer',
-                authentication_issue: issue,
             },
         };
         queryClient.setQueryData(JOBS_QUERY_KEY, [waiting]);
         renderHook(() => useJobUpdates(), { queryClient });
         await waitFor(() => expect(negative).toHaveBeenCalledWith(issue.detail, expect.any(Object)));
-        deliver({ ...waiting, payload: { ...waiting.payload, authentication_issue: null } });
+        deliver({ ...waiting, issues: [] });
         await waitFor(() => expect(close).toHaveBeenCalled());
-        clearAwsAuthentication(issue.profile_name);
+        issueToasts.removeSource('jobs');
         negative.mockRestore();
     });
     beforeEach(() => {

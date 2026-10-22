@@ -5,8 +5,8 @@ import { ExternalLinkIcon } from '@geti-ui/ui/icons';
 
 import { $api } from '../../../api/client';
 import { SchemaRemoteTrainer } from '../../../api/openapi-spec';
+import { IssueErrorAlert } from '../../../components/notification/issue-toasts';
 import { AwsCredentials } from './aws-credentials';
-import { AwsErrorAlert } from './aws-error-alert';
 
 import classes from '../training-targets-table/remote-trainer-form/remote-trainer-form.module.css';
 
@@ -151,7 +151,7 @@ export const CloudProviderForm = ({ remoteTrainer, close }: CloudProviderFormPro
                                 isDisabled={isPending}
                             />
                         )}
-                        {error && <AwsErrorAlert error={error} />}
+                        {error && <IssueErrorAlert error={error} />}
                     </Flex>
                 </Content>
                 <ButtonGroup>

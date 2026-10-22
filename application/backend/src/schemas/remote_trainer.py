@@ -1,15 +1,19 @@
+import re
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
-from schemas.aws_auth import AwsAuthenticationIssue, AwsCredentialSelection, AwsProfileName
+from schemas.aws_auth import AwsCredentialSelection, AwsProfileName
 from schemas.base import UTCDatetime
 from schemas.hardware import DeviceInfo, StorageInfo
+from schemas.operational_issue import OperationalIssue
 from schemas.remote_server import SSH_HOST_ALIAS_PATTERN
 
 HealthStatus = Literal["healthy", "degraded", "unreachable", "starting"]
+AWS_REGION_PATTERN = r"[a-z]{2,}(-[a-z]+)+-\d"
+AWS_BATCH_ARN_PREFIX = rf"arn:aws(?:-[a-z]+)*:batch:{AWS_REGION_PATTERN}:[0-9]{{12}}:"
 
 
 class RemoteTrainerConnectionMode(StrEnum):
@@ -96,8 +100,11 @@ class AwsBatchTarget(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    queue: str = Field(min_length=1, max_length=2048)
-    job_definition: str = Field(min_length=1, max_length=2048)
+    queue: str = Field(max_length=2048, pattern=rf"^{AWS_BATCH_ARN_PREFIX}job-queue/[a-zA-Z0-9][a-zA-Z0-9_-]{{0,127}}$")
+    job_definition: str = Field(
+        max_length=2048,
+        pattern=rf"^{AWS_BATCH_ARN_PREFIX}job-definition/[a-zA-Z0-9_-]{{1,128}}(:[1-9][0-9]*)?$",
+    )
     max_trainers: int | None = Field(
         default=None, gt=0, description="Configured maximum concurrent trainers in this pool."
     )
@@ -142,31 +149,57 @@ class CloudProviderSchema(BaseModel):
     fields: list[CloudProviderField]
 
 
-class AwsBatchResourceConfiguration(BaseModel):
-    """Deployment-independent resource document stored in S3."""
-
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    schema_version: Literal[1]
-    region: str = Field(min_length=1, max_length=64)
-    studio_role_arn: str = Field(min_length=1, max_length=2048)
-    bucket: str = Field(min_length=3, max_length=63)
-    targets: dict[str, AwsBatchTarget] = Field(min_length=1)
-
-
-class AwsBatchConnection(BaseModel):
-    """Resolved AWS Batch connection and resources."""
+class _AwsBatchResources(BaseModel):
+    """Resource constraints shared by configuration documents and connections."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
+    region: str = Field(max_length=64, pattern=rf"^{AWS_REGION_PATTERN}$")
+    studio_role_arn: str = Field(
+        max_length=2048,
+        pattern=r"^arn:aws(?:-[a-z]+)*:iam::[0-9]{12}:role/([\x21-\x7e]+/)?[a-zA-Z0-9_+=,.@-]{1,64}$",
+    )
+    bucket: str = Field(min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9.-]+[a-z0-9]$")
+    targets: dict[str, AwsBatchTarget] = Field(min_length=1, description="Instance type -> Batch resources.")
+
+    @field_validator("bucket")
+    @classmethod
+    def _valid_bucket_name(cls, value: str) -> str:
+        if (
+            ".." in value
+            or re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", value)
+            or value.startswith(("xn--", "sthree-", "amzn-s3-demo-"))
+            or value.endswith(("-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"))
+        ):
+            raise ValueError("Invalid S3 bucket name")
+        if value.endswith("-an") and not re.fullmatch(rf".+-[0-9]{{12}}-{AWS_REGION_PATTERN}-an", value):
+            raise ValueError("Account-regional S3 bucket names require an account ID and region before -an")
+        return value
+
+    @model_validator(mode="after")
+    def _batch_resources_match_region(self) -> Self:
+        for instance_type, target in self.targets.items():
+            for field, arn in (("queue", target.queue), ("job_definition", target.job_definition)):
+                if arn.split(":", 5)[3] != self.region:
+                    raise ValueError(f"targets.{instance_type}.{field} must be in region {self.region}")
+        return self
+
+
+class AwsBatchResourceConfiguration(_AwsBatchResources):
+    """Deployment-independent resource document stored in S3."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+
+
+class AwsBatchConnection(_AwsBatchResources):
+    """Resolved AWS Batch connection and resources."""
+
     connection_mode: Literal[RemoteTrainerConnectionMode.AWS_BATCH] = RemoteTrainerConnectionMode.AWS_BATCH
     schema_version: Literal[1] = 1
-    region: str = Field(min_length=1, max_length=64)
-    studio_role_arn: str = Field(min_length=1, max_length=2048)
     configuration_uri: str | None = None
     profile_name: AwsProfileName = "default"
-    bucket: str = Field(min_length=3, max_length=63)
-    targets: dict[str, AwsBatchTarget] = Field(min_length=1, description="Instance type -> Batch resources.")
 
 
 TrainerConnection = Annotated[
@@ -225,4 +258,6 @@ class RemoteTrainerHealth(BaseModel):
         description="Available storage on the trainer, when reported. Absence does not affect health status.",
     )
     reason_code: str | None = None
-    authentication_issue: AwsAuthenticationIssue | None = None
+    issues: list[OperationalIssue] | None = Field(
+        default=None, description="Current issues; [] confirms recovery, null means the check was inconclusive."
+    )

@@ -6,12 +6,9 @@ import { experimental_streamedQuery as streamedQuery, useQuery } from '@tanstack
 import { batchAsyncIterable } from '../../../api/batch-async-iterable';
 import { fetchClient } from '../../../api/client';
 import { fetchSSE } from '../../../api/fetch-sse';
-import { SchemaAwsAuthenticationIssue } from '../../../api/openapi-spec';
+import { SchemaOperationalIssue } from '../../../api/openapi-spec';
+import { issueToasts } from '../../../components/notification/issue-toasts';
 import { getQueryKey } from '../../../query-client/query-client.interface';
-import {
-    clearAwsAuthentication,
-    notifyAwsAuthentication,
-} from '../../training-targets/training-target-form/aws-error-alert';
 import { ReactComponent as EmptyIllustration } from './../../../assets/illustration.svg';
 import { foldMetricsBatch, sortMetricsByStep } from './merge-metrics-by-step';
 import { MetricGraph } from './metric-graph';
@@ -84,7 +81,7 @@ export const MetricsView = ({ series, isLoading }: MetricsViewProps) => {
 const METRICS_BATCH_INTERVAL_MS = 200;
 
 const useJobMetrics = (jobId: string) => {
-    const [authenticationIssue, setAuthenticationIssue] = useState<SchemaAwsAuthenticationIssue | null>(null);
+    const [issues, setIssues] = useState<SchemaOperationalIssue[]>([]);
     const query = useQuery({
         queryKey: getQueryKey(['get', '/api/jobs/{job_id}/model_metrics', { params: { path: { job_id: jobId } } }]),
         queryFn: streamedQuery({
@@ -93,20 +90,14 @@ const useJobMetrics = (jobId: string) => {
                     params: { path: { job_id: jobId } },
                 });
 
-                let affectedProfile: string | undefined;
                 return batchAsyncIterable(
                     fetchSSE<MetricsEntry>(url, {
                         signal: context.signal,
-                        onAwsAuthentication: (data) => {
-                            const issue: SchemaAwsAuthenticationIssue | null = JSON.parse(data);
-                            setAuthenticationIssue(issue);
-                            if (issue) {
-                                affectedProfile = issue.profile_name;
-                                notifyAwsAuthentication(issue, `metrics:${jobId}`);
-                            } else if (affectedProfile) {
-                                clearAwsAuthentication(affectedProfile, `metrics:${jobId}`);
-                                affectedProfile = undefined;
-                            }
+                        onIssues: (data) => {
+                            if (context.signal.aborted) return;
+                            const snapshot: SchemaOperationalIssue[] = JSON.parse(data);
+                            setIssues(snapshot);
+                            issueToasts.replaceSource(`metrics:${jobId}`, snapshot);
                         },
                     }),
                     METRICS_BATCH_INTERVAL_MS
@@ -118,7 +109,7 @@ const useJobMetrics = (jobId: string) => {
         select: sortMetricsByStep,
         staleTime: Infinity,
     });
-    return { ...query, authenticationIssue };
+    return { ...query, issues };
 };
 
 const lossFormatter = new Intl.NumberFormat('en-US', {
@@ -179,13 +170,12 @@ export const JobMetricsContent = ({ jobId }: { jobId: string }) => {
 
     return (
         <>
-            {query.authenticationIssue && (
-                <StatusLight variant='yellow'>
-                    Metrics updates paused — authenticate profile {query.authenticationIssue.profile_name} on the Studio
-                    backend host.
+            {query.issues.map((issue) => (
+                <StatusLight key={issue.id} variant='yellow'>
+                    {issue.detail}
                 </StatusLight>
-            )}
-            <MetricsView series={metrics} isLoading={query.isLoading && !query.authenticationIssue} />
+            ))}
+            <MetricsView series={metrics} isLoading={query.isLoading && query.issues.length === 0} />
         </>
     );
 };

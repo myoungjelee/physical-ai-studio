@@ -17,9 +17,9 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { $api } from '../../../api/client';
 import { ElapsedDuration } from '../../../components/elapsed-duration.component';
+import { showIssueError } from '../../../components/notification/issue-toasts';
 import { notify } from '../../../components/notification/notification.component';
 import { Table } from '../../../components/table/table';
-import { showAwsError } from '../../training-targets/training-target-form/aws-error-alert';
 import { useRemoteTrainerHealth } from '../../training-targets/use-remote-trainer-health';
 import { useDatasetQuery, useEnvironmentQuery } from '../api/queries';
 import { durationBetween } from '../shared/duration';
@@ -72,7 +72,7 @@ const TrainerCell = ({ job }: { job: SchemaTrainJob }) => {
 };
 
 const TrainJobStatus = ({ job }: { job: SchemaTrainJob }) => {
-    const authenticationRequired = job.payload.training_target === 'remote' && job.payload.authentication_issue;
+    const issue = job.issues[0];
     const disconnected =
         job.payload.training_target === 'remote' && job.message === 'Trainer unreachable; waiting to reconnect';
     const isBatch =
@@ -92,15 +92,8 @@ const TrainJobStatus = ({ job }: { job: SchemaTrainJob }) => {
             <Flex direction={'column'} gap={'size-50'}>
                 <Flex gap={'size-100'} alignItems={'center'} wrap>
                     <Text UNSAFE_style={{ fontWeight: 500 }}>{job.payload.model_name}</Text>
-                    {authenticationRequired ? (
-                        <SingleBadge
-                            color='var(--spectrum-global-color-orange-600)'
-                            text={
-                                job.payload.training_target === 'remote' && job.payload.cancel_requested
-                                    ? 'Stop pending — authentication required'
-                                    : 'Awaiting AWS authentication'
-                            }
-                        />
+                    {issue ? (
+                        <SingleBadge color='var(--spectrum-global-color-orange-600)' text={issue.title} />
                     ) : disconnected ? (
                         <SingleBadge color='var(--spectrum-global-color-orange-600)' text='Connection lost' />
                     ) : isBatch && batchState ? (
@@ -170,8 +163,8 @@ const JobMenu = ({ trainJob, onViewLogs }: { trainJob: SchemaTrainJob; onViewLog
         if (action === 'logs') {
             onViewLogs();
         }
-        if (action === 'authentication' && trainJob.payload.training_target === 'remote') {
-            showAwsError(trainJob.payload.authentication_issue);
+        if (action === 'issues') {
+            trainJob.issues.forEach(showIssueError);
         }
         if (action === 'delete') {
             deleteJobMutation.mutate({
@@ -190,9 +183,7 @@ const JobMenu = ({ trainJob, onViewLogs }: { trainJob: SchemaTrainJob; onViewLog
             </ActionButton>
             <Menu onAction={onAction} disabledKeys={disabledKeys}>
                 <Item key='logs'>Logs</Item>
-                {trainJob.payload.training_target === 'remote' && trainJob.payload.authentication_issue ? (
-                    <Item key='authentication'>Authentication instructions</Item>
-                ) : null}
+                {trainJob.issues.length > 0 ? <Item key='issues'>Issue details</Item> : null}
                 <Item key='delete'>Delete</Item>
             </Menu>
         </MenuTrigger>

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { $api } from '../../api/client';
-import { observeAwsTrainerAuthentication } from './training-target-form/aws-error-alert';
+import { issueToasts } from '../../components/notification/issue-toasts';
 
 const REMOTE_UNAVAILABLE_POLL_MS = 15000;
 const REMOTE_STARTING_POLL_MS = 5000;
@@ -10,7 +10,7 @@ const REMOTE_STARTING_POLL_MS = 5000;
  * Reads a remote trainer's health and retries unavailable trainers until they recover.
  */
 export const useRemoteTrainerHealth = (remoteTrainerId: string | null) => {
-    const observer = useRef<ReturnType<typeof observeAwsTrainerAuthentication> | undefined>(undefined);
+    const observer = useRef<ReturnType<typeof issueToasts.observe> | undefined>(undefined);
     const query = $api.useQuery(
         'get',
         '/api/remote-trainers/{remote_trainer_id}/health',
@@ -21,7 +21,9 @@ export const useRemoteTrainerHealth = (remoteTrainerId: string | null) => {
             refetchInterval: (healthQuery) => {
                 const status = healthQuery.state.data?.status;
                 if (status === 'starting') return REMOTE_STARTING_POLL_MS;
-                return status === 'unreachable' || healthQuery.state.data?.authentication_issue
+                return status === 'unreachable' ||
+                    healthQuery.state.data?.issues?.length ||
+                    issueToasts.hasIssues(`trainer:${remoteTrainerId}`)
                     ? REMOTE_UNAVAILABLE_POLL_MS
                     : false;
             },
@@ -29,7 +31,7 @@ export const useRemoteTrainerHealth = (remoteTrainerId: string | null) => {
     );
     useEffect(() => {
         if (remoteTrainerId === null) return;
-        const subscription = observeAwsTrainerAuthentication(remoteTrainerId);
+        const subscription = issueToasts.observe(`trainer:${remoteTrainerId}`);
         observer.current = subscription;
         return () => {
             subscription.unsubscribe();
@@ -37,7 +39,7 @@ export const useRemoteTrainerHealth = (remoteTrainerId: string | null) => {
         };
     }, [remoteTrainerId]);
     useEffect(() => {
-        observer.current?.update(query.data);
+        if (query.data?.remote_trainer_id === remoteTrainerId) observer.current?.update(query.data.issues);
     }, [query.data, remoteTrainerId]);
 
     return {

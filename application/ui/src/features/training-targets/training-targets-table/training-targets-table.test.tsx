@@ -60,13 +60,19 @@ describe('TrainingTargetsTable', () => {
         });
         server.use(
             http.get(REMOTE_TRAINER_HEALTH_PATH, () =>
-                HttpResponse.json({ ...healthyTrainer, remote_trainer_id: batchTrainer.id, devices: [], storage: null })
+                HttpResponse.json({
+                    ...healthyTrainer,
+                    remote_trainer_id: batchTrainer.id,
+                    devices: [],
+                    storage: null,
+                    issues: [],
+                })
             )
         );
 
         render(<TrainingTargetsTable rows={[directUrlRow(batchTrainer)]} onEdit={rs.fn()} onDelete={rs.fn()} />);
 
-        expect(await screen.findByText('AWS credentials and job queues are accessible')).toBeInTheDocument();
+        expect(await screen.findByText('responded in 24 ms and is ready for training requests')).toBeInTheDocument();
         expect(screen.getByText('Batch service')).toBeInTheDocument();
         const capacityText = capacity ? 'g4dn.2xlarge: up to 4 trainers' : 'g4dn.2xlarge: Not reported';
         expect(screen.getByText('Configured capacity')).toBeInTheDocument();

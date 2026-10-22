@@ -5,16 +5,17 @@ import { expect, http, test } from './fixtures';
 
 test('AWS setup requires a named profile and explains backend configuration', async ({ page, network }) => {
     network.use(
+        http.get('/api/jobs', () => HttpResponse.json([])),
         http.get('/api/remote-trainers', () => HttpResponse.json([])),
         http.get('/api/remote-servers/feature-status', () => HttpResponse.json({ network_exposed: false })),
         http.get('/api/remote-trainers/providers/aws/auth', () => HttpResponse.json(getMockedAwsAuthCapabilities())),
         http.post('/api/remote-trainers/providers/aws/configuration', () =>
             HttpResponse.json(
                 {
-                    code: 'aws_credentials_expired',
+                    id: 'credentials-expired',
                     title: 'AWS SSO session missing or expired',
                     detail: 'Renew the studio profile on the backend host, then retry in Studio.',
-                    command: 'aws sso login --profile=studio',
+                    copy_text: 'aws sso login --profile=studio',
                 },
                 { status: 400 }
             )
@@ -57,10 +58,10 @@ test('AWS setup requires a named profile and explains backend configuration', as
     const fieldBounds = await picker.boundingBox();
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.getByText('Renew the studio profile on the backend host, then retry in Studio.')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Copy command' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Copy', exact: true })).toBeVisible();
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
-    await page.getByRole('button', { name: 'Copy command' }).click();
-    await expect(page.getByRole('button', { name: 'Copy command' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('aws sso login --profile=studio');
     await expect(page.getByText('Copied to clipboard.')).toHaveCount(0);
     await expect(page.getByRole('dialog')).toHaveCount(1);

@@ -1,13 +1,16 @@
 import asyncio
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.schema import Base, ProjectDB
 from repositories.job_repo import JobRepository
 from repositories.mappers.job_mapper import JobMapper
 from schemas.aws_auth import AwsAuthenticationIssue
+from schemas.base_job import JobStatus
 from schemas.job import RemoteTrainJobPayload, TrainJob
 from services.job_service import JobService
 
@@ -100,3 +103,12 @@ def test_authentication_updates_preserve_persisted_cancellation_and_remote_ident
         await engine.dispose()
 
     asyncio.run(check())
+
+
+@pytest.mark.anyio
+async def test_pending_training_transition_rejects_other_states() -> None:
+    """Only claiming and cancellation are valid queued training transitions."""
+    session = AsyncMock()
+    with pytest.raises(ValueError, match="only be claimed or canceled"):
+        await JobRepository(session).transition_pending_train_job(uuid4(), JobStatus.COMPLETED)
+    session.execute.assert_not_awaited()

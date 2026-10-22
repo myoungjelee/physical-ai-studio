@@ -32,12 +32,14 @@ MODULE = "services.training_backends.aws_batch"
 def connection() -> AwsBatchConnection:
     return AwsBatchConnection(
         region="us-east-1",
-        studio_role_arn="arn:aws:iam::123:role/studio",
+        studio_role_arn="arn:aws:iam::123456789012:role/studio",
         bucket="jobs-bucket",
         targets={
-            "g4dn.2xlarge": {"queue": "small-queue", "job_definition": "small-definition"},
-            "g6e.2xlarge": {"queue": "medium-queue", "job_definition": "medium-definition"},
-            "g7e.8xlarge": {"queue": "large-queue", "job_definition": "large-definition"},
+            instance_type: {
+                "queue": f"arn:aws:batch:us-east-1:123456789012:job-queue/{size}-queue",
+                "job_definition": f"arn:aws:batch:us-east-1:123456789012:job-definition/{size}-definition",
+            }
+            for instance_type, size in [("g4dn.2xlarge", "small"), ("g6e.2xlarge", "medium"), ("g7e.8xlarge", "large")]
         },
     )
 
@@ -118,7 +120,7 @@ async def test_batch_catalog_and_preparation_do_not_use_http(connection, monkeyp
 def test_batch_trainer_url_preserves_resolved_resources(connection, configuration_uri, profile_name) -> None:
     connection.configuration_uri = configuration_uri
     connection.profile_name = profile_name
-    connection.targets["g4dn.2xlarge"].job_definition = "arn:aws:batch:us-east-1:123:job-definition/small:1"
+    connection.targets["g4dn.2xlarge"].job_definition = "arn:aws:batch:us-east-1:123456789012:job-definition/small:1"
     assert aws_batch_connection_from_url(aws_batch_trainer_url(connection)) == connection
 
 
@@ -164,8 +166,8 @@ async def test_submit_routes_by_policy_and_ingests_artifact(context, aws, monkey
     s3.download_file.side_effect = download
     await (await get_training_backend(context.payload)).train(context)
     submitted = batch.submit_job.call_args.kwargs
-    assert submitted["jobQueue"] == f"{queue}-queue"
-    assert submitted["jobDefinition"] == f"{queue}-definition"
+    assert submitted["jobQueue"] == f"arn:aws:batch:us-east-1:123456789012:job-queue/{queue}-queue"
+    assert submitted["jobDefinition"] == f"arn:aws:batch:us-east-1:123456789012:job-definition/{queue}-definition"
     assert submitted["parameters"] == {"job_prefix": f"jobs/{context.job.id}"}
     assert submitted["containerOverrides"]["environment"] == [{"name": "HF_TOKEN", "value": "test-token"}]
     assert b"test-token" not in s3.put_object.call_args.kwargs["Body"]

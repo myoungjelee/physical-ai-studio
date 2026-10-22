@@ -3,21 +3,16 @@ import { rs } from '@rstest/core';
 import { act, waitFor } from '@testing-library/react';
 import { HttpResponse } from 'msw';
 
-import { SchemaAwsAuthenticationIssue, SchemaRemoteTrainerHealth } from '../../api/openapi-spec';
+import { SchemaRemoteTrainerHealth } from '../../api/openapi-spec';
 import { http } from '../../api/utils';
 import { server } from '../../msw-node-setup';
 import { createQueryClient } from '../../query-client/query-client';
+import { getMockedOperationalIssue } from '../../test-utils/mocks/mock-operational-issue';
 import { renderHook } from '../../test-utils/render';
 import { useRemoteTrainersHealth } from './training-targets-table/use-remote-trainers-health';
 import { useRemoteTrainerHealth } from './use-remote-trainer-health';
 
-const issue: SchemaAwsAuthenticationIssue = {
-    profile_name: 'health-studio',
-    code: 'aws_credentials_expired',
-    title: 'Session expired',
-    detail: 'Renew health-studio on the backend host.',
-    command: 'aws sso login --profile=health-studio',
-};
+const issue = getMockedOperationalIssue();
 
 const useSingleHealth = (id: string) => useRemoteTrainerHealth(id).health;
 const useMultipleHealth = (id: string) => useRemoteTrainersHealth([id]).get(id)?.health;
@@ -40,7 +35,7 @@ describe.each([
                 const health: SchemaRemoteTrainerHealth = {
                     remote_trainer_id: id,
                     status: expired.has(id) ? 'unreachable' : 'healthy',
-                    authentication_issue: expired.has(id) ? issue : null,
+                    issues: expired.has(id) ? [issue] : [],
                     checked_at: '2026-10-20T12:00:00Z',
                     devices: [],
                 };
@@ -75,6 +70,38 @@ describe.each([
         second.unmount();
     });
 
+    it('retains the warning through an inconclusive check and clears on confirmed recovery', async () => {
+        const queryClient = createQueryClient();
+        const view = renderHook(() => useHealth('aws'), { queryClient });
+        await waitFor(() => expect(negative).toHaveBeenCalledOnce());
+        server.use(
+            http.get('/api/remote-trainers/{remote_trainer_id}/health', () =>
+                HttpResponse.json({
+                    remote_trainer_id: 'aws',
+                    status: 'unreachable',
+                    checked_at: '2026-10-20T12:00:00Z',
+                    issues: null,
+                })
+            )
+        );
+        await act(() => queryClient.invalidateQueries());
+        await waitFor(() => expect(view.result.current?.issues).toBeNull());
+        expect(close).not.toHaveBeenCalled();
+        server.use(
+            http.get('/api/remote-trainers/{remote_trainer_id}/health', () =>
+                HttpResponse.json({
+                    remote_trainer_id: 'aws',
+                    status: 'healthy',
+                    checked_at: '2026-10-20T12:00:01Z',
+                    issues: [],
+                })
+            )
+        );
+        await act(() => queryClient.invalidateQueries());
+        await waitFor(() => expect(close).toHaveBeenCalledOnce());
+        view.unmount();
+    });
+
     it('keeps the AWS warning when switching to a healthy unrelated trainer', async () => {
         const queryClient = createQueryClient();
         let trainerId = 'aws';
@@ -101,9 +128,9 @@ describe.each([
         const list = renderHook(() => useRemoteTrainersHealth(['aws']), { queryClient });
         const other = renderHook(() => useHealth('other-aws'), { queryClient });
         await waitFor(() => {
-            expect(single.result.current.health?.authentication_issue).toEqual(issue);
-            expect(list.result.current.get('aws')?.health?.authentication_issue).toEqual(issue);
-            expect(other.result.current?.authentication_issue).toEqual(issue);
+            expect(single.result.current.health?.issues).toEqual([issue]);
+            expect(list.result.current.get('aws')?.health?.issues).toEqual([issue]);
+            expect(other.result.current?.issues).toEqual([issue]);
         });
         single.unmount();
         expect(close).not.toHaveBeenCalled();

@@ -1,18 +1,15 @@
 // Copyright (C) 2025-2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import useWebSocket from 'react-use-websocket';
 
 import { $api, fetchClient } from '../../api/client';
 import { SchemaTrainJob } from '../../api/openapi-spec';
+import { issueToasts } from '../../components/notification/issue-toasts';
 import { notify } from '../../components/notification/notification.component';
-import {
-    clearAwsAuthentication,
-    notifyAwsAuthentication,
-} from '../training-targets/training-target-form/aws-error-alert';
 import { JOBS_QUERY_KEY, SchemaJob, useJobCache } from './use-job-cache';
 
 const isTrainJob = (job: SchemaJob): job is SchemaTrainJob => job.type === 'training';
@@ -34,22 +31,13 @@ const isTrainJob = (job: SchemaJob): job is SchemaTrainJob => job.type === 'trai
 export const useJobUpdates = (project_id?: string) => {
     const client = useQueryClient();
     const { addJob } = useJobCache();
-    const { data: jobs = [] } = $api.useQuery('get', '/api/jobs');
-    const affectedProfiles = useRef(new Set<string>());
+    const { data: jobs } = $api.useQuery('get', '/api/jobs');
     useEffect(() => {
-        const active = new Set<string>();
-        for (const job of jobs) {
-            if (job.type !== 'training' || job.payload.training_target !== 'remote') continue;
-            const issue = job.payload.authentication_issue;
-            if (issue && ['pending', 'running'].includes(job.status)) {
-                active.add(issue.profile_name);
-                notifyAwsAuthentication(issue);
-            }
-        }
-        for (const profile of affectedProfiles.current) {
-            if (!active.has(profile)) clearAwsAuthentication(profile);
-        }
-        affectedProfiles.current = active;
+        if (!jobs) return;
+        issueToasts.replaceSource(
+            'jobs',
+            jobs.flatMap((job) => job.issues)
+        );
     }, [jobs]);
 
     const onMessage = ({ data }: WebSocketEventMap['message']) => {
@@ -69,12 +57,7 @@ export const useJobUpdates = (project_id?: string) => {
 
         const isCurrentProject = project_id !== undefined && job.project_id === project_id;
 
-        if (
-            isCurrentProject &&
-            job.message &&
-            job.status === 'running' &&
-            !(job.payload.training_target === 'remote' && job.payload.authentication_issue)
-        ) {
+        if (isCurrentProject && job.message && job.status === 'running' && job.issues.length === 0) {
             notify('info', job.message);
         }
 

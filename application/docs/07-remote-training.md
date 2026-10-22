@@ -29,6 +29,8 @@ Verify the file has permissions `0440` (`sudo chmod 0440 /etc/sudoers.d/physical
 
 Studio can create a GPU-backed remote trainer in your AWS account and connect to it through an SSH tunnel.
 
+For cloud-based remote training, the Hugging Face token may be exposed in logs depending on your cloud provider settings. We recommend using short-lived tokens scoped to the access required for training.
+
 > [!WARNING]
 > Delete the CloudFormation stack when you finish training to terminate the EC2 instance and avoid additional AWS charges.
 
@@ -88,6 +90,8 @@ The EC2 instance keeps running after training finishes. Delete its CloudFormatio
 ## AWS Batch provider
 
 The **AWS Provider** training target submits one-off training jobs to AWS Batch. Studio supports one AWS provider with the fixed name **AWS Provider**. Studio uses the selected named AWS profile on its backend host to assume the configured Studio role.
+
+For cloud-based remote training, the Hugging Face token may be exposed in logs depending on your cloud provider settings. We recommend using short-lived tokens scoped to the access required for training.
 
 The supplied stack scales compute to zero when idle. Keep it deployed for future training jobs; storage charges still apply.
 
