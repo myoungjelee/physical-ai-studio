@@ -47,17 +47,16 @@ def test_resolve_aws_configuration(profile_name: str) -> None:
         configuration_uri="s3://config-bucket/studio-config.json",
         profile_name=profile_name,
     )
+    target = {
+        "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/queue-name",
+        "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/definition-name:1",
+    }
     resources = {
         "schema_version": 1,
         "region": "eu-west-1",
         "studio_role_arn": "arn:aws:iam::123456789012:role/studio",
         "bucket": "jobs-bucket",
-        "targets": {
-            "g4dn.xlarge": {
-                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/queue-name",
-                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/definition-name:1",
-            }
-        },
+        "targets": {"g4dn.xlarge": target},
     }
     body = BytesIO(json.dumps(resources).encode())
     with patch("boto3.Session") as make_session:
@@ -73,7 +72,7 @@ def test_resolve_aws_configuration(profile_name: str) -> None:
     assert result.region == resources["region"]
     assert result.studio_role_arn == resources["studio_role_arn"]
     assert result.bucket == "jobs-bucket"
-    assert result.targets["g4dn.xlarge"].queue == resources["targets"]["g4dn.xlarge"]["queue"]
+    assert result.targets["g4dn.xlarge"].queue == target["queue"]
     assert body.closed
 
 

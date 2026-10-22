@@ -15,7 +15,7 @@ from schemas.operational_issue import OperationalIssue
 class RemoteTrainJobPayloadResponse(TrainJobPayloadBase):
     """Remote training details without provider-specific authentication state."""
 
-    training_target: Literal[TrainingTarget.REMOTE] = TrainingTarget.REMOTE
+    training_target: Literal[TrainingTarget.REMOTE] = TrainingTarget.REMOTE  # type: ignore[valid-type]
     remote_trainer_id: UUID
     remote_trainer_url: str | None = None
     remote_trainer_name: str | None = None
@@ -50,19 +50,19 @@ class JobResponseBase(BaseJob):
 class TrainJob(JobResponseBase):
     """Training job API response."""
 
-    type: Literal[JobType.TRAINING] = JobType.TRAINING
+    type: Literal[JobType.TRAINING] = JobType.TRAINING  # type: ignore[valid-type]
     payload: Annotated[LocalTrainJobPayload | RemoteTrainJobPayloadResponse, Field(discriminator="training_target")]
 
 
 class DatasetImportJob(JobResponseBase):
     """Dataset import job API response."""
 
-    type: Literal[JobType.DATASET_IMPORT] = JobType.DATASET_IMPORT
+    type: Literal[JobType.DATASET_IMPORT] = JobType.DATASET_IMPORT  # type: ignore[valid-type]
     payload: DatasetImportJobPayload
 
 
 JobResponse = Annotated[TrainJob | DatasetImportJob, Field(discriminator="type")]
-JOB_RESPONSE_ADAPTER = TypeAdapter(JobResponse)
+JOB_RESPONSE_ADAPTER: TypeAdapter[TrainJob | DatasetImportJob] = TypeAdapter(JobResponse)
 
 
 def job_response(job: InternalJob) -> TrainJob | DatasetImportJob:

@@ -73,17 +73,16 @@ def test_ssh_host_alias_rejects_wildcard() -> None:
 
 
 def test_aws_batch_connection_parses_cloudformation_output() -> None:
+    target = {
+        "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
+        "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
+    }
     output = {
         "schema_version": 1,
         "region": "eu-west-1",
         "studio_role_arn": "arn:aws:iam::123456789012:role/studio",
         "bucket": "jobs-bucket",
-        "targets": {
-            "g4dn.xlarge": {
-                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
-                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
-            }
-        },
+        "targets": {"g4dn.xlarge": target},
     }
 
     config = RemoteTrainerCreate.model_validate(
@@ -91,7 +90,7 @@ def test_aws_batch_connection_parses_cloudformation_output() -> None:
     )
 
     assert isinstance(config.connection, AwsBatchConnection)
-    assert config.connection.targets["g4dn.xlarge"].queue == output["targets"]["g4dn.xlarge"]["queue"]
+    assert config.connection.targets["g4dn.xlarge"].queue == target["queue"]
 
 
 def test_aws_batch_connection_requires_at_least_one_target() -> None:
