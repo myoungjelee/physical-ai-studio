@@ -290,8 +290,11 @@ async def test_check_remote_trainer_probes_aws_batch_without_http() -> None:
     assert result.devices == []
 
 
-@pytest.mark.anyio
-async def test_check_remote_trainer_reports_disabled_aws_queue_as_degraded() -> None:
+@pytest.mark.parametrize(
+    "queues,reason",
+    [([], "resource_missing"), ([{"state": "DISABLED", "status": "VALID"}], "resource_disabled")],
+)
+async def test_check_remote_trainer_reports_unavailable_resources_without_toast_issues(queues, reason) -> None:
     trainer = RemoteTrainer(
         id=uuid4(),
         name="batch",
@@ -303,7 +306,7 @@ async def test_check_remote_trainer_reports_disabled_aws_queue_as_degraded() -> 
         ),
     )
     batch = MagicMock()
-    batch.describe_job_queues.return_value = {"jobQueues": [{"state": "DISABLED", "status": "VALID"}]}
+    batch.describe_job_queues.return_value = {"jobQueues": queues}
     session = MagicMock()
     session.client.return_value = batch
 
@@ -314,19 +317,25 @@ async def test_check_remote_trainer_reports_disabled_aws_queue_as_degraded() -> 
         result = await RemoteTrainerService(MagicMock()).check_remote_trainer(trainer.id)
 
     assert result.status == "degraded"
-    assert result.reason_code == "job_queue_disabled"
+    assert result.reason_code == reason
     assert result.devices == []
+    assert result.issues == []
 
 
 @pytest.mark.parametrize(
     "error,status,reason",
     [
-        (LoginRefreshRequired(), "degraded", "aws_credentials_expired"),
-        (SSOTokenLoadError(error_msg="expired"), "degraded", "aws_credentials_expired"),
-        (NoCredentialsError(), "degraded", "aws_credentials_missing"),
-        (ClientError({"Error": {"Code": "ExpiredToken"}}, "AssumeRole"), "degraded", "aws_credentials_expired"),
-        (ClientError({"Error": {"Code": "AccessDenied"}}, "AssumeRole"), "degraded", "aws_access_denied"),
-        (EndpointConnectionError(endpoint_url="https://sts.us-east-1.amazonaws.com"), "unreachable", "aws_unavailable"),
+        (LoginRefreshRequired(), "degraded", "authentication_required"),
+        (SSOTokenLoadError(error_msg="expired"), "degraded", "authentication_required"),
+        (NoCredentialsError(), "degraded", "authentication_required"),
+        (ClientError({"Error": {"Code": "ExpiredToken"}}, "AssumeRole"), "degraded", "authentication_required"),
+        (ClientError({"Error": {"Code": "AccessDenied"}}, "AssumeRole"), "degraded", "access_denied"),
+        (
+            EndpointConnectionError(endpoint_url="https://sts.us-east-1.amazonaws.com"),
+            "unreachable",
+            "connection_failed",
+        ),
+        (ClientError({"Error": {"Code": "ServiceUnavailable"}}, "DescribeJobQueues"), "unreachable", "service_error"),
     ],
 )
 async def test_aws_authentication_failures_are_not_reported_as_network_failures(error, status, reason) -> None:
@@ -347,6 +356,12 @@ async def test_aws_authentication_failures_are_not_reported_as_network_failures(
         result = await RemoteTrainerService(MagicMock()).check_remote_trainer(trainer.id)
     assert result.status == status
     assert result.reason_code == reason
+    if reason == "authentication_required":
+        assert result.issues and result.issues[0].id
+    elif status == "unreachable":
+        assert result.issues is None
+    else:
+        assert result.issues == []
 
 
 @pytest.mark.anyio

@@ -53,6 +53,7 @@ const model: SchemaModel = {
 };
 
 const trainingJob: SchemaTrainJob = {
+    issues: [],
     id: 'job-1',
     project_id: 'project-1',
     progress: 100,

@@ -187,6 +187,7 @@ class RemoteTrainerService:
             devices=devices,
             storage=storage,
             reason_code=reason_code,
+            issues=[] if status in {"healthy", "degraded"} else None,
         )
 
     @staticmethod

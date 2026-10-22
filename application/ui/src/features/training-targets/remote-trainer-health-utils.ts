@@ -11,10 +11,10 @@ export const healthLabel = (health?: SchemaRemoteTrainerHealth, isChecking = fal
     if (health === undefined) return isChecking ? 'Checking' : 'Not checked';
     if (health.status === 'starting') return health.reason_code ? `Starting: ${health.reason_code}` : 'Starting';
     if (health.reason_code === 'check_failed') return 'Check failed';
-    if (health.reason_code === 'aws_credentials_expired') return 'Credentials expired';
-    if (health.reason_code === 'aws_credentials_missing') return 'Authentication required';
-    if (health.reason_code === 'aws_profile_not_found') return 'Profile not found';
-    if (health.reason_code === 'aws_access_denied') return 'Access denied';
+    if (health.reason_code === 'authentication_required') return 'Authentication required';
+    if (health.reason_code === 'access_denied') return 'Access denied';
+    if (health.reason_code === 'resource_missing') return 'Resource missing';
+    if (health.reason_code === 'resource_disabled') return 'Resource unavailable';
     return health.status === 'healthy' ? 'Healthy' : health.status === 'degraded' ? 'Degraded' : 'Unreachable';
 };
 
@@ -33,26 +33,22 @@ export const healthDescription = (health?: SchemaRemoteTrainerHealth) => {
     if (health.status === 'starting') {
         return health.reason_code ?? 'The trainer container is still starting.';
     }
-    if (health.status === 'healthy') return 'The trainer health endpoint and device report are available.';
+    if (health.status === 'healthy') return 'The training target is accessible and ready.';
     switch (health.reason_code) {
-        case 'aws_credentials_expired':
-            return 'AWS session expired. Renew the saved profile on the Studio backend host, then check status.';
-        case 'aws_credentials_missing':
-            return 'AWS credentials missing. Configure the saved profile on the backend host, then check status.';
-        case 'aws_profile_not_found':
-            return 'Saved AWS profile not found on the backend. Edit the target to select a configured profile.';
-        case 'aws_access_denied':
-            return 'Your AWS identity does not have the required permissions. Check role access and trust settings.';
-        case 'aws_unavailable':
-            return 'AWS could not be reached. Check the backend network connection.';
-        case 'job_queue_disabled':
-            return 'An AWS Batch job queue is disabled or invalid.';
-        case 'job_queue_missing':
-            return 'An AWS Batch job queue could not be found.';
+        case 'authentication_required':
+            return 'Authentication is required. Authenticate on the Studio backend host, then check status.';
+        case 'access_denied':
+            return 'Access to the training target was denied. Check permissions and access settings.';
+        case 'resource_missing':
+            return 'A configured training resource could not be found. Check the target configuration.';
+        case 'resource_disabled':
+            return 'A configured training resource is disabled or invalid.';
+        case 'service_error':
+            return 'The training service returned an error. Try checking status again.';
         case 'timeout':
             return 'The trainer did not respond within five seconds.';
         case 'connection_failed':
-            return 'Studio could not connect to the configured trainer URL.';
+            return 'Studio could not connect to the training target. Check the backend network connection.';
         case 'http_error':
             return 'The trainer returned an error response.';
         case 'unhealthy':

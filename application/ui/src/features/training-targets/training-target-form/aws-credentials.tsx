@@ -3,7 +3,7 @@ import { useId } from 'react';
 import { Flex, Item, Picker, Text } from '@geti-ui/ui';
 
 import { $api } from '../../../api/client';
-import { AwsErrorAlert } from './aws-error-alert';
+import { IssueErrorAlert } from '../../../components/notification/issue-toasts';
 import { AwsProfileHelp } from './aws-profile-help';
 
 import classes from '../training-targets-table/remote-trainer-form/remote-trainer-form.module.css';
@@ -52,7 +52,7 @@ export const AwsCredentials = ({ profileName, onProfileChange, isDisabled }: Aws
             {profiles.data?.profiles?.length === 0 && !error && (
                 <div role='status'>No AWS profiles found. Open the information hint for setup instructions.</div>
             )}
-            {error && <AwsErrorAlert error={error} />}
+            {error && <IssueErrorAlert error={error} />}
         </Flex>
     );
 };

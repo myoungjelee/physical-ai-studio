@@ -4,7 +4,7 @@ import { useQueries } from '@tanstack/react-query';
 
 import { $api } from '../../../api/client';
 import { SchemaRemoteTrainerHealth } from '../../../api/openapi-spec';
-import { observeAwsTrainerAuthentication } from '../training-target-form/aws-error-alert';
+import { issueToasts } from '../../../components/notification/issue-toasts';
 
 const REMOTE_UNAVAILABLE_POLL_MS = 15000;
 const REMOTE_STARTING_POLL_MS = 5000;
@@ -21,7 +21,7 @@ type RemoteTrainerHealthEntry = {
  * `useRemoteTrainerHealth` (identical query key), and retries unreachable trainers until they recover.
  */
 export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string, RemoteTrainerHealthEntry> => {
-    const observers = useRef(new Map<string, ReturnType<typeof observeAwsTrainerAuthentication>>());
+    const observers = useRef(new Map<string, ReturnType<typeof issueToasts.observe>>());
     const queries = useQueries({
         queries: remoteTrainerIds.map((remoteTrainerId) =>
             $api.queryOptions(
@@ -33,7 +33,9 @@ export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string,
                     refetchInterval: (healthQuery) => {
                         const status = healthQuery.state.data?.status;
                         if (status === 'starting') return REMOTE_STARTING_POLL_MS;
-                        return status === 'unreachable' || healthQuery.state.data?.authentication_issue
+                        return status === 'unreachable' ||
+                            healthQuery.state.data?.issues?.length ||
+                            issueToasts.hasIssues(`trainer:${remoteTrainerId}`)
                             ? REMOTE_UNAVAILABLE_POLL_MS
                             : false;
                     },
@@ -53,10 +55,10 @@ export const useRemoteTrainersHealth = (remoteTrainerIds: string[]): Map<string,
             const id = remoteTrainerIds[index];
             let observer = observers.current.get(id);
             if (!observer) {
-                observer = observeAwsTrainerAuthentication(id);
+                observer = issueToasts.observe(`trainer:${id}`);
                 observers.current.set(id, observer);
             }
-            observer.update(query.data);
+            if (query.data?.remote_trainer_id === id) observer.update(query.data.issues);
         });
     }, [queries, remoteTrainerIds]);
     useEffect(() => {

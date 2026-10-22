@@ -131,14 +131,17 @@ def _probe_sync(connection: AwsBatchConnection) -> tuple[HealthStatus, str | Non
         from services.aws_auth_service import authentication_issue, credential_error_reason
 
         if reason := credential_error_reason(exc):
-            return "degraded", reason, authentication_issue(exc, connection.profile_name)
-        code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
+            return (
+                "degraded",
+                "access_denied" if reason == "aws_access_denied" else "authentication_required",
+                authentication_issue(exc, connection.profile_name),
+            )
         logger.debug("AWS Batch probe failed: {}", exc)
-        return "unreachable", code or "aws_unavailable", None
+        return "unreachable", "service_error" if isinstance(exc, ClientError) else "connection_failed", None
     if len(queues) != len(queue_names):
-        return "degraded", "job_queue_missing", None
+        return "degraded", "resource_missing", None
     if any(q.get("state") != "ENABLED" or q.get("status") != "VALID" for q in queues):
-        return "degraded", "job_queue_disabled", None
+        return "degraded", "resource_disabled", None
     return "healthy", None, None
 
 
@@ -146,6 +149,8 @@ async def probe_aws_batch(
     remote_trainer_id: UUID, connection: AwsBatchConnection, checked_at: datetime
 ) -> RemoteTrainerHealth:
     """Check credentials and job queues without representing queues as physical GPUs."""
+    from services.aws_auth_service import operational_authentication_issue
+
     started = perf_counter()
     try:
         status, reason_code, issue = await asyncio.wait_for(
@@ -162,5 +167,7 @@ async def probe_aws_batch(
         devices=[],
         storage=None,
         reason_code=reason_code,
-        authentication_issue=issue,
+        issues=[operational_authentication_issue(issue)]
+        if issue
+        else ([] if status in {"healthy", "degraded"} else None),
     )

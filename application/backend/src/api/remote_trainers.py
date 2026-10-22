@@ -7,10 +7,10 @@ from fastapi.responses import JSONResponse
 
 from api.aws_auth import router as aws_auth_router
 from api.dependencies import get_remote_trainer_service
+from schemas.operational_issue import OperationalIssue
 from schemas.remote_trainer import (
     AwsBatchConnection,
     AwsBatchProviderConfiguration,
-    CloudProviderError,
     CloudProviderField,
     CloudProviderSchema,
     RemoteTrainer,
@@ -18,7 +18,7 @@ from schemas.remote_trainer import (
     RemoteTrainerHealth,
     RemoteTrainerUpdate,
 )
-from services.aws_auth_service import aws_auth_error
+from services.aws_auth_service import operational_aws_error
 from services.aws_batch import resolve_aws_batch_configuration
 from services.remote_trainer_service import RemoteTrainerService
 
@@ -43,7 +43,7 @@ async def list_cloud_provider_schemas() -> list[CloudProviderSchema]:
 
 
 @router.post(
-    "/providers/aws/configuration", response_model=AwsBatchConnection, responses={400: {"model": CloudProviderError}}
+    "/providers/aws/configuration", response_model=AwsBatchConnection, responses={400: {"model": OperationalIssue}}
 )
 async def resolve_cloud_provider_configuration(
     configuration: AwsBatchProviderConfiguration,
@@ -56,14 +56,16 @@ async def resolve_cloud_provider_configuration(
     except ValueError:
         return JSONResponse(
             status_code=400,
-            content=CloudProviderError(
-                code="aws_configuration_invalid",
+            content=OperationalIssue(
+                id="provider-configuration-invalid",
                 title="Invalid AWS configuration",
                 detail="The S3 configuration document is invalid or exceeds 64 KiB.",
             ).model_dump(),
         )
     except (BotoCoreError, ClientError, TimeoutError) as error:
-        return JSONResponse(status_code=400, content=aws_auth_error(error, configuration.profile_name).model_dump())
+        return JSONResponse(
+            status_code=400, content=operational_aws_error(error, configuration.profile_name).model_dump()
+        )
 
 
 @router.get("")

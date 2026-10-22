@@ -45,6 +45,7 @@ const localJob: SchemaTrainJob = {
     created_at: '2026-07-14T09:00:00Z',
     extra_info: { 'train/loss_step': 0.123456 },
     type: 'training',
+    issues: [],
     payload: getMockedTrainJobPayload(),
 };
 
@@ -138,21 +139,15 @@ describe('TrainingRow', () => {
     it('keeps a running Batch job visible while authentication is required', () => {
         renderTrainingRow({
             status: 'running',
+            issues: [{ id: 'issue-1', title: 'Session expired', detail: 'Renew studio on the backend host.' }],
             payload: {
                 ...localJob.payload,
                 training_target: 'remote',
                 remote_trainer_id: remoteTrainer.id,
                 remote_trainer_url: 'aws-batch://us-east-1/training-jobs',
-                authentication_issue: {
-                    profile_name: 'studio',
-                    code: 'aws_credentials_expired',
-                    title: 'Session expired',
-                    detail: 'Renew studio on the backend host.',
-                    command: 'aws sso login --profile=studio',
-                },
             },
         });
-        expect(screen.getByText('Awaiting AWS authentication')).toBeInTheDocument();
+        expect(screen.getByText('Session expired')).toBeInTheDocument();
         expect(screen.getByRole('progressbar')).toBeInTheDocument();
     });
 

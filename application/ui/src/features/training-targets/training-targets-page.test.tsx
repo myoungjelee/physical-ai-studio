@@ -381,13 +381,14 @@ describe('TrainingTargetsPage', () => {
                     ...healthyTrainer,
                     remote_trainer_id: awsTrainer.id,
                     status: 'unreachable',
-                    authentication_issue: {
-                        profile_name: 'deleted-target-studio',
-                        code: 'aws_credentials_expired',
-                        title: 'Session expired',
-                        detail: 'Renew deleted-target-studio.',
-                        command: 'aws sso login --profile=deleted-target-studio',
-                    },
+                    issues: [
+                        {
+                            id: 'deleted-target-issue',
+                            title: 'Session expired',
+                            detail: 'Renew deleted-target-studio.',
+                            copy_text: 'aws sso login --profile=deleted-target-studio',
+                        },
+                    ],
                 })
             ),
             mswHttp.delete('http://localhost:7860/api/remote-trainers/:remote_trainer_id', () => {
@@ -461,7 +462,10 @@ describe('TrainingTargetsPage', () => {
             http.get(REMOTE_TRAINERS_PATH, () => HttpResponse.json([])),
             http.post('/api/remote-trainers/providers/aws/configuration', () => {
                 resolutions++;
-                return HttpResponse.json({ detail: 'Should not be called' }, { status: 400 });
+                return HttpResponse.json(
+                    { id: 'unexpected', title: 'Unexpected request', detail: 'Should not be called' },
+                    { status: 400 }
+                );
             })
         );
         render(<TrainingTargetsPage />);
@@ -638,8 +642,8 @@ describe('TrainingTargetsPage', () => {
                     {
                         title: 'AWS SSO session expired',
                         detail: 'Renew the studio profile on the backend host.',
-                        command: 'aws sso login --profile=studio',
-                        code: 'aws_credentials_expired',
+                        copy_text: 'aws sso login --profile=studio',
+                        id: 'credentials-expired',
                     },
                     { status: 400 }
                 )
@@ -657,7 +661,7 @@ describe('TrainingTargetsPage', () => {
         await waitFor(() =>
             expect(toast.negative).toHaveBeenCalledWith(
                 'Renew the studio profile on the backend host.',
-                expect.objectContaining({ actionLabel: 'Copy command' })
+                expect.objectContaining({ actionLabel: 'Copy' })
             )
         );
         expect(within(dialog).getByRole('button', { name: /AWS profile/ })).toHaveTextContent('studio');

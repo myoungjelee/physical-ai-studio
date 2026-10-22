@@ -36,6 +36,7 @@ class ModelMetricsService:
             async with await anyio.open_file(path, encoding="utf-8") as f:
                 header_line = await f.readline()
                 headers = next(csv.reader([header_line]))
+                yield ServerSentEvent(event="issues", data="[]")
                 headers = [header.replace("/", "_") for header in headers]
 
                 while True:
@@ -78,11 +79,11 @@ class ModelMetricsService:
         """Stream successive metric snapshots published by a Batch trainer to S3."""
         from botocore.exceptions import BotoCoreError, ClientError
 
-        from services.aws_auth_service import authentication_issue
+        from services.aws_auth_service import authentication_issue, operational_authentication_issue
         from services.aws_batch import _make_session, aws_batch_connection_from_url
 
         connection = aws_batch_connection_from_url(trainer_url)
-        client, session_created, rows_sent, awaiting_authentication = None, 0.0, 0, False
+        client, session_created, rows_sent, needs_issue_snapshot = None, 0.0, 0, True
         try:
             while True:
                 try:
@@ -101,8 +102,10 @@ class ModelMetricsService:
                 except (BotoCoreError, ClientError) as error:
                     if issue := authentication_issue(error, connection.profile_name):
                         client = None
-                        awaiting_authentication = True
-                        yield ServerSentEvent(event="aws_authentication", data=issue.model_dump_json())
+                        needs_issue_snapshot = True
+                        yield ServerSentEvent(
+                            event="issues", data=json.dumps([operational_authentication_issue(issue).model_dump()])
+                        )
                         await asyncio.sleep(5)
                         continue
                     if not isinstance(error, ClientError) or error.response["Error"]["Code"] not in {
@@ -115,9 +118,9 @@ class ModelMetricsService:
                 if lines and not lines[-1].endswith("\n"):
                     lines.pop()
                 rows = list(csv.DictReader(lines))
-                if awaiting_authentication:
-                    yield ServerSentEvent(event="aws_authentication", data="null")
-                    awaiting_authentication = False
+                if needs_issue_snapshot:
+                    yield ServerSentEvent(event="issues", data="[]")
+                    needs_issue_snapshot = False
                 for row in rows[rows_sent:]:
                     data = {
                         key.replace("/", "_"): ModelMetricsService._parse_value(value) for key, value in row.items()
@@ -135,6 +138,7 @@ class ModelMetricsService:
     @staticmethod
     async def empty_metrics_stream() -> AsyncGenerator[ServerSentEvent]:
         """Yield a terminal SSE event for sources with no log file yet."""
+        yield ServerSentEvent(event="issues", data="[]")
         yield ServerSentEvent(data="DONE")
 
     @staticmethod

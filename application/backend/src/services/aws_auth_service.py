@@ -2,9 +2,11 @@
 
 import asyncio
 import shlex
+from uuid import NAMESPACE_URL, uuid5
 
 from core.security import require_aws_feature_active
 from schemas.aws_auth import AwsAuthCapabilities, AwsAuthenticationIssue, AwsCredentialSelection, AwsIdentity
+from schemas.operational_issue import OperationalIssue
 from schemas.remote_trainer import CloudProviderError
 
 
@@ -138,6 +140,29 @@ class AwsAuthenticationRequiredError(Exception):
     def __init__(self, issue: AwsAuthenticationIssue) -> None:
         self.issue = issue
         super().__init__(issue.detail)
+
+
+def operational_authentication_issue(issue: AwsAuthenticationIssue) -> OperationalIssue:
+    """Give all observers of a profile's credential failure the same issue identity."""
+    return OperationalIssue(
+        id=str(uuid5(NAMESPACE_URL, f"studio:aws:authentication:{issue.profile_name}")),
+        title=issue.title,
+        detail=issue.detail,
+        copy_text=issue.command,
+    )
+
+
+def operational_aws_error(error: Exception, profile_name: str | None = None) -> OperationalIssue:
+    """Translate provider request failures into the common public error contract."""
+    if profile_name and (issue := authentication_issue(error, profile_name)):
+        return operational_authentication_issue(issue)
+    recovery = aws_auth_error(error, profile_name)
+    return OperationalIssue(
+        id=str(uuid5(NAMESPACE_URL, f"studio:aws:{recovery.code}:{profile_name}")),
+        title=recovery.title or "Cannot access provider",
+        detail=recovery.detail,
+        copy_text=recovery.command,
+    )
 
 
 def _profiles() -> list[str]:

@@ -3,6 +3,7 @@
 
 import json
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,6 +38,9 @@ async def test_batch_metrics_wait_for_s3_and_emit_only_new_complete_rows(monkeyp
     monkeypatch.setattr("services.model_metrics_service.asyncio.sleep", AsyncMock())
     stream = ModelMetricsService.tail_batch_csv_file(aws_batch_trainer_url(connection), "studio-job-id")
     try:
+        initial = await anext(stream)
+        assert initial.event == "issues"
+        assert initial.data == "[]"
         assert json.loads((await anext(stream)).data) == {"step": 0, "train_loss": 2.5}
         assert json.loads((await anext(stream)).data) == {"step": 1, "train_loss": 1.25}
     finally:
@@ -45,6 +49,19 @@ async def test_batch_metrics_wait_for_s3_and_emit_only_new_complete_rows(monkeyp
     make_session.assert_called_once_with(connection)
     client.get_object.assert_called_with(Bucket="job-bucket", Key="jobs/studio-job-id/metrics.csv")
     assert first.closed and unchanged.closed and second.closed
+
+
+async def test_local_metrics_snapshot_clears_issues_left_by_a_remote_stream(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.csv"
+    path.write_text("step,train/loss\n1,2.5\n")
+    stream = ModelMetricsService.tail_csv_file(path)
+    try:
+        snapshot = await anext(stream)
+        assert snapshot.event == "issues"
+        assert snapshot.data == "[]"
+        assert json.loads((await anext(stream)).data) == {"step": 1, "train_loss": 2.5}
+    finally:
+        await stream.aclose()
 
 
 @pytest.mark.parametrize("missing_code", [None, "NoSuchKey", "404"])
@@ -76,11 +93,11 @@ async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkey
     stream = ModelMetricsService.tail_batch_csv_file(aws_batch_trainer_url(connection), "job")
     try:
         issue = await anext(stream)
-        assert issue.event == "aws_authentication"
-        assert json.loads(issue.data)["command"] == "aws sso login --profile=studio"
+        assert issue.event == "issues"
+        assert json.loads(issue.data)[0]["copy_text"] == "aws sso login --profile=studio"
         recovery = await anext(stream)
-        assert recovery.event == "aws_authentication"
-        assert recovery.data == "null"
+        assert recovery.event == "issues"
+        assert recovery.data == "[]"
         assert client.get_object.call_count == 1
         sleep.assert_awaited_once_with(5)
         assert json.loads((await anext(stream)).data) == {"step": 1, "train_loss": 2.5}

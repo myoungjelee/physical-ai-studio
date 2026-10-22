@@ -1,6 +1,7 @@
 import { Badge, Button, Grid, Heading, StatusLight, Text, View } from '@geti-ui/ui';
 
 import { SchemaRemoteTrainer, SchemaRemoteTrainerHealth } from '../../../../api/openapi-spec';
+import { showIssueError } from '../../../../components/notification/issue-toasts';
 import { connectionModeLabel, sshHostDisplay } from '../../remote-trainer-connection-utils';
 import {
     capabilityDetail,
@@ -14,7 +15,6 @@ import {
     storageDetail,
     trainerHealthDetail,
 } from '../../remote-trainer-health-utils';
-import { showAwsError } from '../../training-target-form/aws-error-alert';
 
 import classes from './remote-trainer-detail.module.css';
 
@@ -87,9 +87,9 @@ export const RemoteTrainerDetail = ({ remoteTrainer, health, isChecking }: Remot
         <View backgroundColor={'gray-75'} padding={'size-300'} borderColor={'gray-300'} borderWidth={'thin'}>
             <div className={`${classes.detailGrid} ${classes.twoColumns}`}>
                 <View UNSAFE_className={classes.detailSection}>
-                    {health?.authentication_issue && (
-                        <Button variant='secondary' onPress={() => showAwsError(health.authentication_issue)}>
-                            Authentication instructions
+                    {!!health?.issues?.length && (
+                        <Button variant='secondary' onPress={() => health.issues?.forEach(showIssueError)}>
+                            Issue details
                         </Button>
                     )}
                     <div className={classes.sectionHeader}>
@@ -101,11 +101,7 @@ export const RemoteTrainerDetail = ({ remoteTrainer, health, isChecking }: Remot
                     <div className={classes.checkList}>
                         <HealthCheckRow
                             label={batchConnection ? 'Batch service' : 'Trainer health endpoint'}
-                            detail={
-                                batchConnection && health?.status === 'healthy' && !isChecking
-                                    ? 'AWS credentials and job queues are accessible'
-                                    : trainerHealthDetail(health, isChecking, deviceReportIsInvalid)
-                            }
+                            detail={trainerHealthDetail(health, isChecking, deviceReportIsInvalid)}
                             state={trainerHealthState}
                             status={deviceReportIsInvalid ? 'Healthy' : healthLabel(health, isChecking)}
                         />

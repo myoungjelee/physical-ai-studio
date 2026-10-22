@@ -4,9 +4,10 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, computed_field, model_validator
 
-from schemas.aws_auth import AwsAuthenticationIssue, AwsCredentialSelection, AwsProfileName
+from schemas.aws_auth import AwsCredentialSelection, AwsProfileName
 from schemas.base import UTCDatetime
 from schemas.hardware import DeviceInfo, StorageInfo
+from schemas.operational_issue import OperationalIssue
 from schemas.remote_server import SSH_HOST_ALIAS_PATTERN
 
 HealthStatus = Literal["healthy", "degraded", "unreachable", "starting"]
@@ -222,4 +223,6 @@ class RemoteTrainerHealth(BaseModel):
         description="Available storage on the trainer, when reported. Absence does not affect health status.",
     )
     reason_code: str | None = None
-    authentication_issue: AwsAuthenticationIssue | None = None
+    issues: list[OperationalIssue] | None = Field(
+        default=None, description="Current issues; [] confirms recovery, null means the check was inconclusive."
+    )
