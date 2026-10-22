@@ -28,9 +28,14 @@ def test_assume_role_uses_selected_source_profile() -> None:
     connection = AwsBatchConnection(
         region="us-east-1",
         profile_name="studio",
-        studio_role_arn="arn:aws:iam::123:role/studio",
+        studio_role_arn="arn:aws:iam::123456789012:role/studio",
         bucket="jobs-bucket",
-        targets={"gpu": {"queue": "queue", "job_definition": "definition"}},
+        targets={
+            "gpu": {
+                "queue": "arn:aws:batch:us-east-1:123456789012:job-queue/queue",
+                "job_definition": "arn:aws:batch:us-east-1:123456789012:job-definition/definition:1",
+            }
+        },
     )
     source, assumed = MagicMock(), MagicMock()
     source.client.return_value.assume_role.return_value = {

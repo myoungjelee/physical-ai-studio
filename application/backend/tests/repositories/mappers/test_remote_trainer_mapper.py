@@ -25,9 +25,14 @@ from schemas.remote_trainer import (
         SshConnection(ssh_connection=ManualSshConnection(hostname="gpu.example.test", user="ec2-user")),
         AwsBatchConnection(
             region="eu-west-1",
-            studio_role_arn="arn:aws:iam::123:role/studio",
+            studio_role_arn="arn:aws:iam::123456789012:role/studio",
             bucket="jobs-bucket",
-            targets={"g4dn.xlarge": AwsBatchTarget(queue="arn:q", job_definition="arn:jd")},
+            targets={
+                "g4dn.xlarge": AwsBatchTarget(
+                    queue="arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
+                    job_definition="arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
+                )
+            },
         ),
     ],
     ids=["direct", "ssh-alias", "ssh-manual", "aws-batch"],

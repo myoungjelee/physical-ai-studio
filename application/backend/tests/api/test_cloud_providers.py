@@ -32,7 +32,12 @@ def test_resolve_provider_configuration() -> None:
         region="eu-west-1",
         studio_role_arn="arn:aws:iam::123456789012:role/studio",
         bucket="jobs-bucket",
-        targets={"g4dn.xlarge": {"queue": "queue-name", "job_definition": "definition-name"}},
+        targets={
+            "g4dn.xlarge": {
+                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/queue-name",
+                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/definition-name:1",
+            }
+        },
     )
     with patch("api.remote_trainers.resolve_aws_batch_configuration", return_value=resolved):
         response = client.post("/api/remote-trainers/providers/aws/configuration", json=CONFIGURATION)

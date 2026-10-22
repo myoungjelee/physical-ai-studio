@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from schemas.remote_trainer import (
     AwsBatchConnection,
+    AwsBatchResourceConfiguration,
     DirectConnection,
     ManualSshConnection,
     RemoteTrainer,
@@ -77,7 +78,12 @@ def test_aws_batch_connection_parses_cloudformation_output() -> None:
         "region": "eu-west-1",
         "studio_role_arn": "arn:aws:iam::123456789012:role/studio",
         "bucket": "jobs-bucket",
-        "targets": {"g4dn.xlarge": {"queue": "arn:aws:batch:q", "job_definition": "arn:aws:batch:jd"}},
+        "targets": {
+            "g4dn.xlarge": {
+                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
+                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
+            }
+        },
     }
 
     config = RemoteTrainerCreate.model_validate(
@@ -85,12 +91,17 @@ def test_aws_batch_connection_parses_cloudformation_output() -> None:
     )
 
     assert isinstance(config.connection, AwsBatchConnection)
-    assert config.connection.targets["g4dn.xlarge"].queue == "arn:aws:batch:q"
+    assert config.connection.targets["g4dn.xlarge"].queue == output["targets"]["g4dn.xlarge"]["queue"]
 
 
 def test_aws_batch_connection_requires_at_least_one_target() -> None:
-    with pytest.raises(ValidationError):
-        AwsBatchConnection(region="eu-west-1", studio_role_arn="arn", bucket="jobs-bucket", targets={})
+    with pytest.raises(ValidationError, match="targets"):
+        AwsBatchConnection(
+            region="eu-west-1",
+            studio_role_arn="arn:aws:iam::123456789012:role/studio",
+            bucket="jobs-bucket",
+            targets={},
+        )
 
 
 def test_remote_trainer_exposes_mode_and_url_as_computed_fields() -> None:
@@ -99,9 +110,14 @@ def test_remote_trainer_exposes_mode_and_url_as_computed_fields() -> None:
         name="batch",
         connection=AwsBatchConnection(
             region="eu-west-1",
-            studio_role_arn="arn",
+            studio_role_arn="arn:aws:iam::123456789012:role/studio",
             bucket="jobs-bucket",
-            targets={"g4dn.xlarge": {"queue": "q", "job_definition": "jd"}},
+            targets={
+                "g4dn.xlarge": {
+                    "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
+                    "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
+                }
+            },
         ),
     )
     direct = RemoteTrainer(id=uuid4(), name="direct", connection=DirectConnection(url="https://trainer.test"))
@@ -115,3 +131,155 @@ def test_remote_trainer_exposes_mode_and_url_as_computed_fields() -> None:
 def test_unknown_connection_mode_is_rejected() -> None:
     with pytest.raises(ValidationError):
         RemoteTrainerCreate.model_validate({"name": "x", "connection": {"connection_mode": "gcp"}})
+
+
+@pytest.fixture(params=[AwsBatchResourceConfiguration, AwsBatchConnection])
+def aws_resources(request):
+    return request.param, {
+        "schema_version": 1,
+        "region": "eu-west-1",
+        "studio_role_arn": "arn:aws:iam::123456789012:role/studio",
+        "bucket": "jobs-bucket",
+        "targets": {
+            "gpu": {
+                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
+                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "partition,region",
+    [("aws", "eu-west-1"), ("aws-cn", "cn-north-1"), ("aws-us-gov", "us-gov-west-1"), ("aws-eusc", "eusc-de-east-1")],
+)
+@pytest.mark.parametrize("revision", ["", ":1", ":123"])
+def test_aws_resources_accept_valid_arns_and_strip_whitespace(aws_resources, partition, region, revision) -> None:
+    model, resources = aws_resources
+    resources.update(
+        region=f" {region} ",
+        studio_role_arn=f" arn:{partition}:iam::123456789012:role/service-role/studio ",
+    )
+    resources["targets"]["gpu"] = {
+        "queue": f" arn:{partition}:batch:{region}:123456789012:job-queue/studio-queue_1 ",
+        "job_definition": f" arn:{partition}:batch:{region}:123456789012:job-definition/studio_1{revision} ",
+    }
+
+    result = model.model_validate(resources)
+
+    assert result.region == region
+    assert result.studio_role_arn.endswith("/studio")
+    assert result.targets["gpu"].job_definition.endswith(f"studio_1{revision}")
+
+
+@pytest.mark.parametrize("region", ["", "us", "US-east-1", "u-east-1", "us-east", "us-east-12", "us--east-1"])
+def test_aws_resources_reject_invalid_regions(aws_resources, region) -> None:
+    model, resources = aws_resources
+    resources["region"] = region
+    with pytest.raises(ValidationError, match="region"):
+        model.model_validate(resources)
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    ["abc", "a" * 63, "jobs.example.com", "123-jobs", "jobs-123456789012-eu-west-1-an"],
+)
+def test_aws_resources_accept_valid_buckets(aws_resources, bucket) -> None:
+    model, resources = aws_resources
+    resources["bucket"] = bucket
+    assert model.model_validate(resources).bucket == bucket
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    [
+        "ab",
+        "a" * 64,
+        "Jobs-bucket",
+        "jobs_bucket",
+        "-jobs",
+        "jobs-",
+        ".jobs",
+        "jobs.",
+        "jobs..bucket",
+        "192.168.0.1",
+        "001.002.003.004",
+        "xn--jobs",
+        "sthree-jobs",
+        "amzn-s3-demo-jobs",
+        "jobs-s3alias",
+        "jobs--ol-s3",
+        "jobs.mrap",
+        "jobs--x-s3",
+        "jobs--table-s3",
+        "jobs-an",
+    ],
+)
+def test_aws_resources_reject_invalid_buckets(aws_resources, bucket) -> None:
+    model, resources = aws_resources
+    resources["bucket"] = bucket
+    with pytest.raises(ValidationError, match="bucket"):
+        model.model_validate(resources)
+
+
+@pytest.mark.parametrize(
+    "arn",
+    [
+        "arn",
+        "arn:aws:iam::123:role/studio",
+        "arn:aws:iam::123456789012:user/studio",
+        "arn:aws:sts::123456789012:assumed-role/studio/session",
+        "arn:aws:iam:eu-west-1:123456789012:role/studio",
+        "arn:aws:iam::123456789012:role/",
+        "arn:aws:iam::123456789012:role/has space",
+        "arn:aws:iam::123456789012:role/stüdio",
+        "arn:aws:iam::123456789012:role/" + "a" * 65,
+    ],
+)
+def test_aws_resources_reject_invalid_role_arns(aws_resources, arn) -> None:
+    model, resources = aws_resources
+    resources["studio_role_arn"] = arn
+    with pytest.raises(ValidationError, match="studio_role_arn"):
+        model.model_validate(resources)
+
+
+@pytest.mark.parametrize("field,resource", [("queue", "job-queue"), ("job_definition", "job-definition")])
+@pytest.mark.parametrize(
+    "arn",
+    [
+        "plain-name",
+        "arn:aws:batch:q",
+        "arn:aws:batch:eu-west-1:123:{resource}/studio",
+        "arn:aws:ecs:eu-west-1:123456789012:{resource}/studio",
+        "arn:aws:batch:eu-west-1:123456789012:job/studio",
+        "arn:aws:batch:EU-west-1:123456789012:{resource}/studio",
+        "arn:aws:batch:eu-west-1:123456789012:{resource}/",
+        "arn:aws:batch:eu-west-1:123456789012:{resource}/has space",
+        "arn:aws:batch:eu-west-1:123456789012:{resource}/" + "a" * 129,
+    ],
+)
+def test_aws_resources_reject_invalid_batch_arns(aws_resources, field, resource, arn) -> None:
+    model, resources = aws_resources
+    resources["targets"]["gpu"][field] = arn.format(resource=resource)
+    with pytest.raises(ValidationError, match=field):
+        model.model_validate(resources)
+
+
+@pytest.mark.parametrize("revision", [":0", ":-1", ":latest", ":1:2", ":"])
+def test_aws_resources_reject_invalid_job_definition_revisions(aws_resources, revision) -> None:
+    model, resources = aws_resources
+    resources["targets"]["gpu"]["job_definition"] = (
+        f"arn:aws:batch:eu-west-1:123456789012:job-definition/studio{revision}"
+    )
+    with pytest.raises(ValidationError, match="job_definition"):
+        model.model_validate(resources)
+
+
+@pytest.mark.parametrize("target", ["gpu", "second-gpu"])
+@pytest.mark.parametrize("field", ["queue", "job_definition"])
+def test_aws_resources_reject_batch_arns_in_another_region(aws_resources, target, field) -> None:
+    model, resources = aws_resources
+    resources["targets"][target] = resources["targets"]["gpu"].copy()
+    resources["targets"][target][field] = resources["targets"][target][field].replace("eu-west-1", "us-east-1")
+    with pytest.raises(ValidationError, match=rf"targets\.{target}\.{field} must be in region eu-west-1"):
+        model.model_validate(resources)

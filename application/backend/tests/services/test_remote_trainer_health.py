@@ -262,11 +262,14 @@ async def test_check_remote_trainer_probes_aws_batch_without_http() -> None:
         name="batch",
         connection=AwsBatchConnection(
             region="eu-west-1",
-            studio_role_arn="arn:aws:iam::1:role/studio",
+            studio_role_arn="arn:aws:iam::123456789012:role/studio",
             bucket="jobs-bucket",
             targets={
-                "g4dn.xlarge": {"queue": "q1", "job_definition": "jd1"},
-                "p5.4xlarge": {"queue": "q2", "job_definition": "jd2"},
+                instance_type: {
+                    "queue": f"arn:aws:batch:eu-west-1:123456789012:job-queue/q{index}",
+                    "job_definition": f"arn:aws:batch:eu-west-1:123456789012:job-definition/jd{index}:1",
+                }
+                for index, instance_type in enumerate(["g4dn.xlarge", "p5.4xlarge"], start=1)
             },
         ),
     )
@@ -285,7 +288,9 @@ async def test_check_remote_trainer_probes_aws_batch_without_http() -> None:
         result = await RemoteTrainerService(MagicMock()).check_remote_trainer(trainer.id)
 
     http_client.assert_not_called()
-    batch.describe_job_queues.assert_called_once_with(jobQueues=["q1", "q2"])
+    batch.describe_job_queues.assert_called_once_with(
+        jobQueues=[target.queue for target in trainer.connection.targets.values()]
+    )
     assert result.status == "healthy"
     assert result.devices == []
 
@@ -300,9 +305,14 @@ async def test_check_remote_trainer_reports_unavailable_resources_without_toast_
         name="batch",
         connection=AwsBatchConnection(
             region="eu-west-1",
-            studio_role_arn="arn",
+            studio_role_arn="arn:aws:iam::123456789012:role/studio",
             bucket="jobs-bucket",
-            targets={"g4dn.xlarge": {"queue": "q1", "job_definition": "jd1"}},
+            targets={
+                "g4dn.xlarge": {
+                    "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/q1",
+                    "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/jd1:1",
+                }
+            },
         ),
     )
     batch = MagicMock()
@@ -344,9 +354,14 @@ async def test_aws_authentication_failures_are_not_reported_as_network_failures(
         name="AWS Provider",
         connection=AwsBatchConnection(
             region="us-east-1",
-            studio_role_arn="arn",
+            studio_role_arn="arn:aws:iam::123456789012:role/studio",
             bucket="jobs-bucket",
-            targets={"gpu": {"queue": "queue", "job_definition": "definition"}},
+            targets={
+                "gpu": {
+                    "queue": "arn:aws:batch:us-east-1:123456789012:job-queue/queue",
+                    "job_definition": "arn:aws:batch:us-east-1:123456789012:job-definition/definition:1",
+                }
+            },
         ),
     )
     with (

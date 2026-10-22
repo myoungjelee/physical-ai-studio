@@ -52,7 +52,12 @@ def test_resolve_aws_configuration(profile_name: str) -> None:
         "region": "eu-west-1",
         "studio_role_arn": "arn:aws:iam::123456789012:role/studio",
         "bucket": "jobs-bucket",
-        "targets": {"g4dn.xlarge": {"queue": "queue-name", "job_definition": "definition-name"}},
+        "targets": {
+            "g4dn.xlarge": {
+                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/queue-name",
+                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/definition-name:1",
+            }
+        },
     }
     body = BytesIO(json.dumps(resources).encode())
     with patch("boto3.Session") as make_session:
@@ -68,7 +73,7 @@ def test_resolve_aws_configuration(profile_name: str) -> None:
     assert result.region == resources["region"]
     assert result.studio_role_arn == resources["studio_role_arn"]
     assert result.bucket == "jobs-bucket"
-    assert result.targets["g4dn.xlarge"].queue == "queue-name"
+    assert result.targets["g4dn.xlarge"].queue == resources["targets"]["g4dn.xlarge"]["queue"]
     assert body.closed
 
 
@@ -124,7 +129,12 @@ def _aws() -> AwsBatchConnection:
         region="eu-west-1",
         studio_role_arn="arn:aws:iam::123456789012:role/studio",
         bucket="jobs-bucket",
-        targets={"g4dn.xlarge": {"queue": "arn:q", "job_definition": "arn:jd"}},
+        targets={
+            "g4dn.xlarge": {
+                "queue": "arn:aws:batch:eu-west-1:123456789012:job-queue/studio",
+                "job_definition": "arn:aws:batch:eu-west-1:123456789012:job-definition/studio:1",
+            }
+        },
     )
 
 

@@ -18,8 +18,13 @@ async def test_batch_metrics_wait_for_s3_and_emit_only_new_complete_rows(monkeyp
     connection = AwsBatchConnection(
         region="us-east-1",
         bucket="job-bucket",
-        studio_role_arn="arn:aws:iam::123:role/studio",
-        targets={"g4dn.2xlarge": {"queue": "queue", "job_definition": "definition"}},
+        studio_role_arn="arn:aws:iam::123456789012:role/studio",
+        targets={
+            "g4dn.2xlarge": {
+                "queue": "arn:aws:batch:us-east-1:123456789012:job-queue/queue",
+                "job_definition": "arn:aws:batch:us-east-1:123456789012:job-definition/definition:1",
+            }
+        },
     )
     client = MagicMock()
     first = BytesIO(b"step,train/loss\n0,2.5\n1,")
@@ -70,8 +75,13 @@ async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkey
         region="us-east-1",
         profile_name="studio",
         bucket="job-bucket",
-        studio_role_arn="arn",
-        targets={"gpu": {"queue": "queue", "job_definition": "definition"}},
+        studio_role_arn="arn:aws:iam::123456789012:role/studio",
+        targets={
+            "gpu": {
+                "queue": "arn:aws:batch:us-east-1:123456789012:job-queue/queue",
+                "job_definition": "arn:aws:batch:us-east-1:123456789012:job-definition/definition:1",
+            }
+        },
     )
     session = MagicMock()
     client = session.client.return_value

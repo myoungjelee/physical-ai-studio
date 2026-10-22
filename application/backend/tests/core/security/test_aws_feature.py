@@ -55,7 +55,12 @@ def test_aws_access_rejected_before_reading_credentials(operation: str) -> None:
                         region="us-east-1",
                         studio_role_arn="arn:aws:iam::123456789012:role/studio",
                         bucket="jobs-bucket",
-                        targets={"g4dn.2xlarge": {"queue": "queue", "job_definition": "definition"}},
+                        targets={
+                            "g4dn.2xlarge": {
+                                "queue": "arn:aws:batch:us-east-1:123456789012:job-queue/queue",
+                                "job_definition": "arn:aws:batch:us-east-1:123456789012:job-definition/definition:1",
+                            }
+                        },
                     )
                 )
         session.assert_not_called()
