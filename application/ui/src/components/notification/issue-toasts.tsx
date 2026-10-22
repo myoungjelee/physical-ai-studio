@@ -27,10 +27,7 @@ export const isOperationalIssue = (error: unknown): error is SchemaOperationalIs
     'detail' in error &&
     typeof error.detail === 'string';
 
-const renderIssue = (
-    issue: Pick<SchemaOperationalIssue, 'detail' | 'copy_text'>,
-    onDismiss = () => {}
-) => {
+const renderIssue = (issue: Pick<SchemaOperationalIssue, 'detail' | 'copy_text'>, onDismiss = () => {}) => {
     const close = toast.negative(issue.detail, {
         actionLabel: 'Copy',
         shouldCloseOnAction: false,
