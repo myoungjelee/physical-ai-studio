@@ -1,30 +1,41 @@
-# Simulation library E2E testing
+# Simulation application E2E testing
 
-The simulation suite separates **training regression**, **deployment wiring**, and **task quality**. Moving the arm is not a sorting success. An earlier three-epoch ACT run scored 0% (100 missed items), with about 2 Hz control against 30 Hz demonstrations; those results do not qualify a checkpoint.
+The canonical simulation workflow lives in `application/backend/tests/integration/test_simulation_e2e.py`. It exercises Studio rather than maintaining a parallel library training/deployment pipeline. **Training regression**, **deployment wiring**, and **task quality** are separate verdicts; a completed job, finite loss, or moving arm is not a sorting success.
+
+## Application ownership
+
+The test runs the real FastAPI lifecycle, isolated SQLite database, scheduler, and on-demand worker processes. Discovery of unrelated physical USB robots is disabled; training, export, and camera capture are not mocked.
+
+- Create project/environment profiles and import datasets through normal APIs.
+- Submit `POST /api/jobs:train` and poll the normal job/model endpoints. Production workers own snapshots, policy construction, normalization, validation, checkpointing, and export.
+- Import existing models through the supported `physicalai-studio models import-dir --copy` command. Qualified standalone checkpoints are first staged using the application's shared checkpoint loader/exporter, not a second policy/export implementation.
+- Download the model's Runtime bundle through the normal export endpoint with `environment_id`, `device`, and the recorded task. Execute its **unchanged `runtime.yaml`**. A telemetry observer is attached to Runtime's callback bus because the SDK config loader has no live-callback argument; it does not replace cameras, queues, smoothing, inference, or action execution.
+
+The harness owns fixture preparation, simulator lifecycle/seeds, scoring, and evidence collection only. This is API/job and exported-Runtime integration testing, not browser automation or end-to-end testing of remote SSH trainers. The application's GUI Runtime session and downloaded recipe share `runtime/config_builder.py` configuration.
 
 ## Weekly checks
 
-`.github/workflows/simulation-library-e2e.yml` runs weekly/manual on one self-hosted GPU. It attempts all six policies: ACT, MolmoAct2, Pi0.5, RLDX1, SmolVLA, and XR0. Cosmos3 remains excluded until an embodiment is configured.
+`.github/workflows/simulation-application-e2e.yml` replaces the library workflow and runs weekly/manual on one self-hosted GPU. It attempts ACT, MolmoAct2, Pi0.5, RLDX1, SmolVLA, and XR0. Cosmos3 remains excluded until an embodiment is configured.
 
-1. **Simulator controls:** compare scripted autopilot (`drive`) and no actions (`off`) on the same five seeds at 0.04 m/s. The expert must outperform no actions. Failure blocks policy quality evaluation, not training regression.
-2. **Training regression:** run 20 optimizer steps at batch size 2; save and reload a checkpoint with restricted unpickling. No simulator is needed. This does not establish model quality.
-3. **Export and evaluation:** load a qualified checkpoint from the repository-reviewed manifest, verify its SHA-256, export with the current library to OpenVINO, and run five completed conveyor episodes with Runtime. The 180-second per-episode deadline is a failure safeguard, not a scoring window.
+1. **Simulator controls:** compare scripted expert (`drive`) and no actions (`off`) on five identical seeds at 0.04 m/s. Expert failure blocks quality evaluation, not training regression. Also check actual MJPEG image freshness through the application's camera builder.
+2. **Training regression:** derive a clearly labelled fixture with 20 contiguous frames from each of three source episodes, preserving FPS and decoded pixels. Import through the API and request a normal one-epoch job at batch size two and `val_split=0.2`: two training episodes produce **20 optimizer updates**. There is no hidden Trainer step override. Verify the published checkpoint's optimizer/counter state, application checkpoint reload, finite published validation/training metrics when logged, and the requested Torch export. This fixture is not suitable for behavioral qualification.
+3. **Qualified export/evaluation:** verify a reviewed checkpoint's SHA-256, stage it with the application's exporter, import the model normally, and execute the application-generated OpenVINO CPU recipe for five completed conveyor episodes. The 180-second episode deadline is a failure safeguard, not a scoring window.
 
-Job limits are 20 minutes for training and 30 minutes for evaluation/controls. The serial six-policy matrix has a maximum configured budget of approximately six hours plus setup/report overhead. Cache misses or slow hardware can hit these limits; an incomplete job is not a pass.
+Each job is limited to 30 minutes; the serial twelve-cell policy matrix plus controls has a maximum configured budget of 6.5 hours. Cold caches or slow hardware can time out; incomplete work is not a pass. `SIM_E2E_JOB_TIMEOUT_SECONDS` separately bounds API training-job polling (20 minutes by default).
 
-The report shows training/reload, export/actions, timing, and quality separately. A missing qualified checkpoint is explicitly **baseline unavailable**, not a quality pass. Logs, JUnit, scores, timing, and short inference videos are retained for 14 days; weekly checkpoints and exports are deleted to bound storage.
+Reports separate training/reload, export/actions, timing, and quality. Missing qualified checkpoints are **baseline unavailable**. Policies above Studio's advertised device-memory minimum are **unsupported hardware**, not training passes. Report-only artifacts (JSON, JUnit, logs, recipes, video) last 14 days. Weekly model files are not uploaded or explicitly deleted by the test; their workspace is ephemeral and may be cleaned by the next CI checkout. Use the manual training workflow for retained model artifacts.
 
-### A100 settings
+### Hardware and dependency contracts
 
-MolmoAct2 uses rank-64 LoRA with gradient checkpointing. XR0 freezes its vision encoder and derives learning-rate decay from the training budget. Other policies use constructor defaults. Batch size is 2 throughout. These settings passed short training probes on a 40 GB A100; XR0 and Pi0.5 have little spare memory.
+Use normal Studio training settings, not the old harness's private MolmoAct2/XR0 constructor overrides. On a 40 GiB GPU, Studio's advertised 80 GiB MolmoAct2 and 60 GiB XR0 defaults are reported unsupported; testing those defaults requires larger hardware. This is a coverage limit, not evidence that those policies pass. Batch size is two; ACT uses `32-true`, other policies `bf16-true`.
 
-Rendering uses EGL rather than software OSMesa, which was observed delivering only about 2 FPS. Configure `SIM_E2E_CUDA_VISIBLE_DEVICES` as a repository variable to select the physical GPU (`0` by default). Provide `HF_TOKEN` as a repository secret with access to gated PaliGemma tokenizer assets. GPU selection does not combine memory across cards.
+Rendering uses EGL rather than software OSMesa, previously observed near 2 FPS. Set repository variable `SIM_E2E_CUDA_VISIBLE_DEVICES` to the physical GPU (`0` by default); memory is not combined across cards. Provide `HF_TOKEN` with access to gated model/tokenizer assets.
 
-Both installed Runtime and MuJoCo plugin commits are checked against `91338224c67f0d17f166eb062e3ac9a6762db784` before expensive work. Mixed installations fail rather than silently evaluating another deployment stack. This check caught an inconsistent library lockfile that still resolved Runtime to `f90b3767` despite the configured `91338224` source; the resolved lock entry is now corrected and regression-tested.
+The application backend's `sim-e2e` extra supplies the MuJoCo plugin. Runtime and the plugin are pinned together at `1cc910b451508ce40cd7319ece2a29283fadfcfb`, following current main. Both installed VCS revisions and both project lockfiles are checked. CI isolates `STORAGE_DIR` and `SETTINGS_FILE`; it does not reuse a developer's Studio database or settings.
 
 ## Reproducible episodes
 
-Both workflows offer a **dataset** dropdown on manual dispatch: `50` (the default) or `100`. Scheduled weekly runs keep the original `50` choice. Repository-reviewed IDs and immutable revisions live in `library/tests/integration/simulation_e2e.py`; downloads use separate directories for each choice.
+Both workflows offer a **dataset** dropdown on manual dispatch: `50` (the default) or `100`. Scheduled weekly runs keep the original `50` choice. Repository-reviewed IDs and immutable revisions live in `application/backend/tests/integration/simulation_e2e.py`; downloads use separate directories for each choice.
 
 | Choice | Hugging Face dataset                                                                                  | Episodes / frames | Pinned revision                            |
 | ------ | ----------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------ |
@@ -37,9 +48,13 @@ Selection changes the recording used for training and the camera/action schema u
 
 Each trial pauses the conveyor during setup, fixes a seed, resets, verifies queued commands have taken effect, connects the policy runtime, then resumes the belt. Do not disable episode auto-reset during scoring: in this simulator that also pauses the belt. Scoring stops on the first completed episode and validates all 10 items as correct/wrong/missed. The score is `correct / (correct + wrong + missed)`.
 
+Simulation cameras use Runtime's existing `SharedCamera.from_config(...)` with a nested `physicalai.capture.IPCamera` recipe, matching Studio's production Runtime configuration. The publisher continuously drains the MJPEG stream; inference reads its latest shared frame even while setup, video initialization, or model computation is paused. Direct `IPCamera.read_latest()` calls on this pinned backend consume the next buffered OpenCV frame and timestamp it at read time. That can leave an image seconds old despite apparently fresh timestamps and healthy camera/control rates. Unique timestamps and simulator camera FPS alone do not prove observation freshness.
+
+The controls job also runs `test_simulation_camera_freshness.py`: a local 30-FPS MJPEG stream encodes an actual frame counter into each image. After a 1.5-second consumer pause, the rollout camera must return an image no more than 0.25 seconds old. This checks decoded image content, not the timestamp assigned by the reader, and prevents a regression to direct buffered capture.
+
 HTTP health polling runs on a separate thread, not inside the control tick callback. Results record wall-clock control frequency, inference p95 latency, unique camera timestamps, simulator speed/camera rates, seeds, checkpoint identity, and code/dependency provenance. The timing gate requires at least 80% of the recorded control and camera frequency (24 Hz), with simulator real-time factor between 0.9 and 1.1. It includes startup-to-first-action delay after a paused warmup and reseed/reset. Investigate camera blocking, inference cost, action units/order, and preprocessing parity when timing or task scores regress; do not slow the belt to make a policy pass.
 
-ACT rollouts consume each exported action horizon completely with `SyncExecution(request_threshold=0.0)` and an explicit `ChunkedActionQueue()` without crossfading. This matches native ACT's default queue behavior: the current 100-step configuration predicts again after 100 actions, rather than after approximately 51. Other policies retain half-chunk refill and five-frame crossfade. Each `runtime.run()` reconnects and resets its policy source automatically; calling `source.reset()` between runs is invalid because the source is disconnected.
+Execution settings now come exclusively from the application's downloaded recipe. The current shared builder uses synchronous half-chunk refill and the default five-frame `LerpSmoother`, including ACT; the harness no longer substitutes full-chunk/no-crossfade ACT execution. If that production configuration fails sorting, fix it once in the application/shared Runtime path rather than adding a test-only controller. Each `runtime.run()` reconnects and resets its source automatically; calling `source.reset()` between runs is invalid because it is disconnected.
 
 An isolated CPU-only calibration on the GPU server passed all five scripted episodes at 100% and all five no-action episodes at 0%, with both dependencies attested at the intended revision. OSMesa cameras still measured about 2 FPS while physics stayed near real time. Logs and `controls.json` are under `~/sim-e2e-weekly-validation/results/` on that server. This validates the scoring protocol, not hardware-rendered camera throughput or learned-policy quality.
 
@@ -51,9 +66,9 @@ On a two-step diagnostic model, maximum action difference fell from approximatel
 
 ## Qualifying a checkpoint
 
-`library/configs/simulation-e2e/checkpoints.json` deliberately starts with `null` for each policy. No usable task-performance baseline has been demonstrated yet. To qualify one:
+`application/backend/configs/simulation-e2e/checkpoints.json` deliberately starts with `null` for each policy. No usable task-performance baseline has been demonstrated yet. To qualify one:
 
-1. Train a candidate outside the weekly gate and retain its training provenance.
+1. Train a candidate through the application/manual workflow and retain its request, job/model IDs, dependency pins, metrics, and checkpoints. The harness uses the application's normal validation objective and normalization; it does not transplant the separately retained controlled experiment's stricter validation routine.
 2. Confirm simulator controls and compare native versus exported predictions on representative recorded observations. Check camera views/order, normalization, action units, and timing.
 3. Evaluate the candidate repeatedly on the fixed protocol, inspect videos, and measure score variability.
 4. Publish the trusted Studio-generated `.ckpt` to a versioned model repository. Record its immutable revision, SHA-256, and a positive minimum score justified by measured results in the manifest, reviewed as code.
@@ -70,27 +85,48 @@ Each entry has exactly these fields (placeholders below must be replaced):
 }
 ```
 
-`0.5` is an example, not a measured threshold. Use a threshold supported by qualification trials and their variability. Only trusted, checksum-verified training artifacts belong in this manifest. Loading uses the allowlisted first-party policy class and `weights_only=True`; adapters merge through the existing export contract. Checkpoint reload, export, timing, and score must all pass; a 0% sorting score cannot pass qualification.
+`0.5` is an example, not a measured threshold. Use a threshold supported by qualification trials and their variability. Only trusted, checksum-verified training artifacts belong in this manifest. Loading and adapter merging use the application's existing checkpoint/export path; only trusted, reviewed artifacts should be supplied. Checkpoint reload, export, timing, and score must all pass; a 0% sorting score cannot pass qualification.
 
-## Long training and resuming
+## Long training and model continuation
 
-`.github/workflows/simulation-library-training.yml` is manual-only, separate from the weekly gate. Select a policy and dataset to train three full epochs (94,299 optimizer steps for the original 50-episode dataset at batch size 2; the expanded dataset takes more steps). It saves `last.ckpt` every 1,000 steps and explicitly saves the exact final training state after a successful fit. A five-day self-hosted timeout still applies. Long and weekly workflows share a concurrency group to avoid competing on the same GPU.
+`.github/workflows/simulation-application-training.yml` is manual-only. It submits three full epochs through Studio using the full selected recording and a 20% validation split, then verifies checkpoints and the requested Torch export. Actual update counts come from saved optimizer/loop state, not the previous all-episodes training formula. The five-day timeout and shared GPU concurrency group remain.
 
-To resume, dispatch the same source revision, policy, and dataset with `resume_run_id` pointing to a completed run of the training workflow. It verifies recorded policy/source identity and the dataset repository/revision, then restores optimizer and scheduler state from the checkpoint. Artifacts missing dataset identity are rejected. Checkpoint artifacts are large and expire after seven days; publish valuable candidates before expiry. These artifacts are not automatically promoted to weekly baselines.
+Checkpointing and export retain their existing application behavior. The harness checks the application's published checkpoint (`model.ckpt`, or the selected SnapFlow checkpoint); it does not add periodic/latest checkpoint callbacks, change cancellation handling, or alter export checkpoint selection. Consequently, this migration does not preserve the old library harness's every-1,000-step `last.ckpt` behavior.
+
+The manual workflow archives model directories, metrics, request/provenance JSON, and scratch checkpoints even when training fails. It does not delete existing checkpoints or automatically qualify/publish models. Artifacts expire after seven days; archive valuable runs before expiry. Immutable milestone/epoch copies in the separately retained controlled experiments are not touched by this migration; the workflow does not add checkpoint-retention features to the application.
+
+**Continuation is not optimizer-state resume.** Optional `base_run_id` replaces the old library workflow's `resume_run_id`. It validates matching application provenance, source revision, policy, and dataset, imports the complete Studio model, and submits normal `base_model_id` fine-tuning. Studio starts a **new optimizer/epoch loop**. The harness deliberately does not invent a private resume path; full stateful resume would need an application feature. Old library-only checkpoint artifacts are not accepted as application model artifacts. The existing standalone controlled runs and their stateful continuations remain unchanged.
 
 ## Local commands
 
-From `library/`, install the `tests`, `policies`, `sim-e2e`, and appropriate hardware extras, then set `SIM_E2E_DATASET_DIR`, `SIM_E2E_POLICY`, and `SIM_E2E_OUTPUT_DIR`. Set `SIM_E2E_DATASET=50` (default) or `SIM_E2E_DATASET=100` to match the pinned recording in that directory:
+From `application/backend/`, install the `tests`, `sim-e2e`, and appropriate hardware extras (`cuda` or `cpu`). Select an unused GPU before any CUDA run; CI concurrency does not protect independently launched training processes.
 
 ```bash
-# Bounded training regression, no simulator required
-SIM_E2E_MODE=train uv run --no-sync pytest tests/integration/test_simulation_training_e2e.py -k test_train_export_and_run_in_simulation -v
+uv sync --frozen --extra tests --extra sim-e2e --extra cuda
 
-# Three full epochs; optionally set SIM_E2E_RESUME_CHECKPOINT to your trusted local last.ckpt
-SIM_E2E_MODE=train SIM_E2E_TRAIN_STEPS=-1 uv run --no-sync pytest tests/integration/test_simulation_training_e2e.py -k test_train_export_and_run_in_simulation -v
+# Always use a disposable application database/settings, not your running Studio store.
+work=$(mktemp -d)
+export STORAGE_DIR="$work/studio"
+export SETTINGS_FILE="$work/studio/settings.json"
+export SIM_E2E_OUTPUT_DIR="$work/evidence"
+export SIM_E2E_POLICY=act
+export SIM_E2E_DATASET=50
+export SIM_E2E_DATASET_DIR=/absolute/path/to/the/pinned/recording
+
+# One normal application epoch on the 60-frame wiring fixture; no simulator.
+SIM_E2E_MODE=train uv run --no-sync pytest tests/integration/test_simulation_e2e.py -k test_train_export_and_run_in_simulation -v
+
+# Three full application epochs; optional SIM_E2E_BASE_MODEL_DIR is a complete Studio model.
+SIM_E2E_MODE=train SIM_E2E_FULL_DATASET=true SIM_E2E_EPOCHS=3 uv run --no-sync pytest tests/integration/test_simulation_e2e.py -k test_train_export_and_run_in_simulation -v
 ```
 
-For evaluation/controls, separately start the pinned `physicalai-mujoco` owner in `conveyor_sort`, set `SIM_E2E_HTTP_URL` and `SIM_E2E_OWNER`, and select `-k test_simulator_controls` or set `SIM_E2E_MODE=evaluate` with `-k test_train_export_and_run_in_simulation`. Set `SIM_E2E_RECORD_VIDEO=true` to retain video (requires FFmpeg). `SIM_E2E_MODE=full` keeps the manual train→export→rollout route, but an unqualified candidate's score is not a quality pass.
+For an ACT-only CPU smoke, install `--extra cpu` instead of `cuda` and set `SIM_E2E_ACCELERATOR=cpu`. Set `SIM_E2E_DATASET=100` for the expanded recording and use its corresponding pinned directory. Full training and import create copies/snapshots and large checkpoints; allow sufficient disk and RAM. The in-process HTTP test client can buffer large upload/download bodies.
+
+For evaluation/controls, separately start the pinned `physicalai-mujoco` owner in `conveyor_sort`, set `SIM_E2E_HTTP_URL` and `SIM_E2E_OWNER`, and select `-k test_simulator_controls` or use `SIM_E2E_MODE=evaluate`. `SIM_E2E_RECORD_VIDEO=true` retains video (FFmpeg required). `SIM_E2E_MODE=full` performs full application train → export → Runtime rollout, but an unqualified candidate is never a quality pass.
+
+## Historical diagnostics (not the canonical application workflow)
+
+The experiments below used frozen earlier source/dependency snapshots, not the newly migrated application workflow. They are retained as historical evidence rather than results of this migration.
 
 The retained ACT candidate trained at `6d2f0c22` completed three epochs (94,299 steps; final reported training loss 0.05229). Its original rollout crashed before scoring. A 2026-10-20 re-evaluation with the seeded protocol, EGL, the previous half-chunk refill/crossfade settings, and both dependencies attested at the pinned revision scored **0/50 correct, 1 wrong, 49 missed** through OpenVINO. All five trials passed timing: 27.89–28.06 Hz control, approximately 30 FPS cameras, and real-time physics. Matched controls on seed 104729 scored 10/10 for the expert and 0/10 for no actions. A native PyTorch/GPU rollout on that seed scored 1/10 at 29.34 Hz using the same Runtime execution settings; one episode does not establish a native success rate or explain the backend difference. Native/OpenVINO predictions on five recorded observations differed by at most 0.000237 action units. These results used half-chunk execution; the full-chunk follow-up is recorded below. This candidate remains unqualified. Reports, source snapshots, and videos are under `~/sim-e2e-weekly-validation/act-evaluation-20261020T122416Z-YBIf/` on the GPU server, with the native check in its `native/` subdirectory.
 

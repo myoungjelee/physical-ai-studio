@@ -10,7 +10,7 @@ runs:
         sudo apt-get install -y libegl1 libgl1 ffmpeg
     - name: Start owner
       shell: bash
-      working-directory: library
+      working-directory: application/backend
       run: |
         mkdir -p "$SIM_E2E_OUTPUT_DIR"
         if curl --silent --max-time 2 "$SIM_E2E_HTTP_URL/health" > /dev/null; then

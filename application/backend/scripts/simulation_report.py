@@ -1,6 +1,5 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: INP001
 
 """Print the weekly simulation report from downloaded CI artifacts."""
 
@@ -29,7 +28,7 @@ def summarize(root: Path) -> str:
                 f"no action {controls['off']['score']:.1%}"
             )
     lines = [
-        "## Weekly conveyor regression",
+        "## Weekly application conveyor regression",
         f"Simulator controls: {baseline}",
         "",
         "| Policy | Training/reload | Export + actions | Timing | Quality | Mean score |",
@@ -40,7 +39,7 @@ def summarize(root: Path) -> str:
         evaluate_path = root / f"sim-evaluate-{policy}" / "result.json"
         train = json.loads(train_path.read_text()) if train_path.is_file() else {}
         result = json.loads(evaluate_path.read_text()) if evaluate_path.is_file() else {}
-        training = train.get("status", "failed/incomplete")
+        training = train.get("status", "failed/incomplete").replace("unsupported_hardware", "unsupported hardware")
         if result.get("status") == "quality_baseline_unavailable":
             wiring, timing, quality = "not evaluated", "not evaluated", "baseline unavailable"
         else:
@@ -49,7 +48,11 @@ def summarize(root: Path) -> str:
             quality = result.get("quality", "failed/incomplete")
         value = f"{result['score']:.1%}" if "score" in result else "—"
         lines.append(f"| {policy} | {training} | {wiring} | {timing} | {quality} | {value} |")
-    lines += ["", "Missing/unqualified checkpoints are not quality passes. Inspect per-job logs and JUnit for errors."]
+    lines += [
+        "",
+        "Missing/unqualified checkpoints and unsupported hardware are not passes. "
+        "Inspect per-job logs and JUnit for errors.",
+    ]
     return "\n".join(lines) + "\n"
 
 

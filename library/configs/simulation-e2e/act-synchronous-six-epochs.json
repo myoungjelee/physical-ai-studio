@@ -1,0 +1,42 @@
+{
+  "description": "Portable specification of the six-total-epoch continuation launched on 2026-10-21; not a standalone CLI config.",
+  "baseline_specification": "act-synchronous-holdout.json",
+  "resume": {
+    "parent_total_epochs": 3,
+    "global_step": 83505,
+    "last_checkpoint_sha256": "5a068b642cf6daa5dc70c1767df317c50a6f81ea37402a3d0712a282c5ed010a",
+    "inherited_best_step": 83000,
+    "best_checkpoint_sha256": "871e13c59cfc87c956fcedc22c03a77da768187ade102ea560b24c7c9d221772",
+    "restore_optimizer_and_loop_state": true,
+    "keep_parent_checkpoints_untouched": true,
+    "retain_parent_best_if_continuation_regresses": true
+  },
+  "training": {
+    "total_epochs": 6,
+    "total_optimizer_steps": 167010,
+    "additional_optimizer_steps": 83505,
+    "batch_size": 2,
+    "physical_gpu": 1,
+    "timeout_hours": 10,
+    "data_split": "Same fixed 40/10 synchronous-only episode split as the baseline",
+    "normalization": "Exactly the parent's training-only state/action statistics and fixed ImageNet visual statistics",
+    "learning_rates": "Unchanged from the baseline",
+    "rng_limit": "Fixed seed is reset; bitwise equivalence to an uninterrupted six-epoch run is not claimed"
+  },
+  "checkpoint_retention": {
+    "resumable_last_and_best_every_steps": 1000,
+    "read_only_epoch_snapshots": true,
+    "read_only_milestone_copies_approximately_every_steps": 10000,
+    "read_only_final_copies": true,
+    "verify_sha256_weights_optimizer_and_loop_state": true,
+    "automatic_cleanup": false
+  },
+  "evaluation": {
+    "comparison_seeds": [50000, 50001, 50002, 50003, 50004],
+    "note": "Repeat the fixed baseline protocol for comparison; these seeds are disjoint from training but are not a new unseen evaluation set",
+    "controls": ["no_action", "scripted_expert"],
+    "backends": ["native_cuda_select_action", "openvino_cpu_runtime"],
+    "verify_export_parity": true,
+    "automatic_qualification": false
+  }
+}

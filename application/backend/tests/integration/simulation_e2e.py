@@ -12,18 +12,27 @@ import re
 import threading
 import time
 from importlib.metadata import distribution
-from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.request import Request, urlopen
 
 import numpy as np
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 POLICIES = ("act", "molmoact2", "pi05", "rldx1", "smolvla", "xr0")
-RUNTIME_REVISION = "91338224c67f0d17f166eb062e3ac9a6762db784"
+RUNTIME_REVISION = "1cc910b451508ce40cd7319ece2a29283fadfcfb"
 DATASETS = {
-    "50": {"repo_id": "Albertvh97/conveyor-sort-sim-demos",
-           "revision": "6a949360761fee17089fbaaf8bc53f59715cb575", "episodes": 50},
-    "100": {"repo_id": "Albertvh97/conveyor-sort-sim-demos-100-episodes",
-            "revision": "17db8f758b32141d795a71a064cfa9f5c6341b5b", "episodes": 100},
+    "50": {
+        "repo_id": "Albertvh97/conveyor-sort-sim-demos",
+        "revision": "6a949360761fee17089fbaaf8bc53f59715cb575",
+        "episodes": 50,
+    },
+    "100": {
+        "repo_id": "Albertvh97/conveyor-sort-sim-demos-100-episodes",
+        "revision": "17db8f758b32141d795a71a064cfa9f5c6341b5b",
+        "episodes": 100,
+    },
 }
 SEEDS = (104729, 104743, 104759, 104761, 104773)
 
@@ -37,14 +46,18 @@ def dataset_entry() -> dict:
 
 
 def health(url: str) -> dict:
-    with urlopen(f"{url.rstrip('/')}/health", timeout=5) as response:  # noqa: S310 - explicit local simulator
+    with urlopen(f"{url.rstrip('/')}/health", timeout=5) as response:
         return json.load(response)
 
 
 def command(url: str, route: str, payload: dict) -> None:
-    request = Request(f"{url.rstrip('/')}/{route}", data=json.dumps(payload).encode(),
-                      headers={"Content-Type": "application/json"}, method="POST")
-    with urlopen(request, timeout=5):  # noqa: S310 - explicit local simulator
+    request = Request(
+        f"{url.rstrip('/')}/{route}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=5):
         pass
 
 
@@ -73,9 +86,12 @@ def prepare_episode(url: str, seed: int, mode: str, belt_speed: float) -> dict:
     command(url, "conveyor/belt-speed", {"speed": belt_speed})
     command(url, "reset", {})
     command(url, "autopilot", {"mode": mode})
-    return wait_health(url, lambda h: h["autopilot"]["mode"] == mode
-                       and h["episode"]["spawned"] == 0
-                       and h["episode"]["belt_speed"] == belt_speed)
+    return wait_health(
+        url,
+        lambda h: (
+            h["autopilot"]["mode"] == mode and h["episode"]["spawned"] == 0 and h["episode"]["belt_speed"] == belt_speed
+        ),
+    )
 
 
 def score(episodes: list[dict]) -> float:
@@ -173,15 +189,26 @@ class EpisodeMonitor:
             raise AssertionError("Trial must score exactly one completed episode")
 
     def result(self, seed: int) -> dict:
-        elapsed = self.ticks[-1] - (self.started_at if self.started_at is not None else self.ticks[0]) if self.ticks else 0
-        return {"seed": seed, "score": score(self.episodes), "episodes": self.episodes,
-                "actions_sent": self.actions_sent, "max_joint_change": self.max_joint_change,
-                "steps": len(self.ticks),
-                "control_hz": (len(self.ticks) if self.started_at is not None else len(self.ticks) - 1) / elapsed if elapsed else None,
-                "first_action_delay_s": self.ticks[0] - self.started_at if self.ticks and self.started_at is not None else None,
-                "inference_p95_s": float(np.percentile(self.latencies, 95)) if self.latencies else None,
-                "unique_camera_frames": {key: len(times) for key, times in self.frame_times.items()},
-                "simulator_timing": self.snapshot.get("timing", {})}
+        elapsed = (
+            self.ticks[-1] - (self.started_at if self.started_at is not None else self.ticks[0]) if self.ticks else 0
+        )
+        return {
+            "seed": seed,
+            "score": score(self.episodes),
+            "episodes": self.episodes,
+            "actions_sent": self.actions_sent,
+            "max_joint_change": self.max_joint_change,
+            "steps": len(self.ticks),
+            "control_hz": (len(self.ticks) if self.started_at is not None else len(self.ticks) - 1) / elapsed
+            if elapsed
+            else None,
+            "first_action_delay_s": self.ticks[0] - self.started_at
+            if self.ticks and self.started_at is not None
+            else None,
+            "inference_p95_s": float(np.percentile(self.latencies, 95)) if self.latencies else None,
+            "unique_camera_frames": {key: len(times) for key, times in self.frame_times.items()},
+            "simulator_timing": self.snapshot.get("timing", {}),
+        }
 
 
 def attest_runtime() -> dict:
@@ -207,7 +234,13 @@ def checkpoint_entry(path: Path, policy: str) -> dict | None:
     if not isinstance(entry["revision"], str) or not re.fullmatch(r"[0-9a-f]{40}", entry["revision"]):
         raise ValueError("Checkpoint revision must be immutable")
     filename = entry["filename"]
-    if not isinstance(filename, str) or "/" in filename or "\\" in filename or ".." in filename or not filename.endswith(".ckpt"):
+    if (
+        not isinstance(filename, str)
+        or "/" in filename
+        or "\\" in filename
+        or ".." in filename
+        or not filename.endswith(".ckpt")
+    ):
         raise ValueError("Invalid checkpoint filename")
     if not isinstance(entry["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]):
         raise ValueError("Invalid checkpoint checksum")
