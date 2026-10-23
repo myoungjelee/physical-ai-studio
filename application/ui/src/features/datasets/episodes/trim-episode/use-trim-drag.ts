@@ -1,8 +1,8 @@
 import { PointerEvent, RefObject, useState } from 'react';
 
-import { SchemaEpisode } from '../../../api/openapi-spec';
+import { SchemaEpisode } from '../../../../api/openapi-spec';
+import { Player } from '../use-player';
 import { clamp, TrimRange, withTrimEnd, withTrimStart } from './trim-range';
-import { Player } from './use-player';
 
 export type DragTarget = 'start' | 'end' | 'playhead';
 
@@ -15,10 +15,6 @@ interface UseTrimDragProps {
     seek: (time: number) => void;
 }
 
-/**
- * Pointer interaction for the timeline: dragging a crop handle edits the range and seeks so the cut
- * frame is visible, dragging anywhere else scrubs the playhead. Also tracks the hovered frame.
- */
 export const useTrimDrag = ({ trackRef, episode, player, range, setRange, seek }: UseTrimDragProps) => {
     const [dragging, setDragging] = useState<DragTarget | undefined>(undefined);
     const [hoverFrame, setHoverFrame] = useState<number | undefined>(undefined);

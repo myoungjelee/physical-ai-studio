@@ -5,7 +5,7 @@ import { RobotModelsProvider } from '../../robots/robot-models-context';
 import { EpisodeDockView } from './episode-dock-view';
 import { EpisodeTag } from './episode-tag';
 import { EpisodeViewerProvider, useEpisodeViewer } from './episode-viewer-provider.component';
-import { TrimTimeline } from './trim-timeline';
+import { TrimTimeline } from './trim-episode/trim-timeline';
 
 interface EpisodeViewerProps {
     episode: SchemaEpisode;

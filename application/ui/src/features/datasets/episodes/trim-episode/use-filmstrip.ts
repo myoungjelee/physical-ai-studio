@@ -1,25 +1,42 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { fetchClient } from '../../../api/client';
-import { SchemaEpisode } from '../../../api/openapi-spec';
+import { fetchClient } from '../../../../api/client';
+import { SchemaEpisode, SchemaEpisodeVideo } from '../../../../api/openapi-spec';
 
 const THUMBNAIL_HEIGHT = 96;
 
-/** Grabs `count` evenly spaced thumbnails from the episode's slice of its (shared) overview video file. */
-export const useFilmstrip = (datasetId: string, episode: SchemaEpisode, count: number) => {
+const IMAGE_KEY_PREFIX = 'observation.images.';
+
+export const DEFAULT_FILMSTRIP_CAMERA = 'overview';
+
+const getCameraName = (videoKey: string) =>
+    videoKey.startsWith(IMAGE_KEY_PREFIX) ? videoKey.slice(IMAGE_KEY_PREFIX.length) : videoKey;
+
+export const selectCameraVideo = (videos: SchemaEpisode['videos'], camera: string): SchemaEpisodeVideo | undefined => {
+    const entries = Object.entries(videos);
+    const [, video] = entries.find(([key]) => getCameraName(key) === camera) ?? entries[0] ?? [];
+
+    return video;
+};
+
+interface UseFilmstripOptions {
+    camera: string;
+    count: number;
+}
+
+export const useFilmstrip = (datasetId: string, episode: SchemaEpisode, { camera, count }: UseFilmstripOptions) => {
     const [thumbnails, setThumbnails] = useState<string[]>([]);
     const duration = episode.length / episode.fps;
 
     const source = useMemo(() => {
-        const videos = Object.entries(episode.videos);
-        const [, video] = videos.find(([key]) => key.includes('overview')) ?? videos[0] ?? [];
+        const video = selectCameraVideo(episode.videos, camera);
         if (video === undefined) return undefined;
 
         const url = fetchClient.PATH('/api/dataset/{dataset_id}/video/{video_path}', {
             params: { path: { dataset_id: datasetId, video_path: video.path } },
         });
         return { url, start: video.start };
-    }, [datasetId, episode.videos]);
+    }, [datasetId, episode.videos, camera]);
 
     useEffect(() => {
         setThumbnails([]);

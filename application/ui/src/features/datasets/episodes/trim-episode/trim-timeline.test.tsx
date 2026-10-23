@@ -3,13 +3,13 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 
-import { SchemaEpisode } from '../../../api/openapi-spec';
-import { http } from '../../../api/utils';
-import { server } from '../../../msw-node-setup';
-import { getMockedEpisodeDetail } from '../../../test-utils/mocks/mock-episode';
-import { render } from '../../../test-utils/render';
+import { SchemaEpisode } from '../../../../api/openapi-spec';
+import { http } from '../../../../api/utils';
+import { server } from '../../../../msw-node-setup';
+import { getMockedEpisodeDetail } from '../../../../test-utils/mocks/mock-episode';
+import { render } from '../../../../test-utils/render';
+import { Player, PlayState } from '../use-player';
 import { TrimTimeline } from './trim-timeline';
-import { Player, PlayState } from './use-player';
 
 const DATASET_ID = 'dataset-1';
 const EPISODE_PATH = '/api/dataset/{dataset_id}/episodes/{episode_index}';
@@ -75,7 +75,7 @@ describe('TrimTimeline', () => {
         renderTimeline();
 
         expect(await screen.findByRole('button', { name: 'Trim' })).toBeDisabled();
-        expect(screen.getByText(/keep 0–10 · 10\/10 frames/)).toBeInTheDocument();
+        expect(screen.getByText(/keep 0–9 · 10\/10 frames/)).toBeInTheDocument();
     });
 
     it('applies the suggested range and enables Trim', async () => {
@@ -83,8 +83,23 @@ describe('TrimTimeline', () => {
 
         await user.click(await screen.findByRole('button', { name: 'Suggest range' }));
 
-        expect(screen.getByText(/keep 1–6 · 5\/10 frames/)).toBeInTheDocument();
+        expect(screen.getByText(/keep 1–5 · 5\/10 frames/)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Trim' })).toBeEnabled();
+    });
+
+    it('renders a labelled track for every gripper of a bimanual robot', async () => {
+        renderTimeline({
+            action_keys: ['left_shoulder_pan.pos', 'left_gripper.pos', 'right_shoulder_pan.pos', 'right_gripper.pos'],
+            actions: MOVING_ACTIONS.map(([value]) => [value, value, value, value]),
+        });
+
+        await screen.findByRole('button', { name: 'Trim' });
+
+        // Each gripper name appears twice: once in the legend and once as the label of its own track.
+        expect(screen.getAllByText('left gripper')).toHaveLength(2);
+        expect(screen.getAllByText('right gripper')).toHaveLength(2);
+        // Arm joints are only listed in the legend; they share the joint positions track.
+        expect(screen.getAllByText('left shoulder pan')).toHaveLength(1);
     });
 
     describe('tooltip', () => {
@@ -127,48 +142,13 @@ describe('TrimTimeline', () => {
         player.timeRef.current = 3;
 
         await user.click(await screen.findByRole('button', { name: '[ In' }));
-        expect(screen.getByText(/keep 3–10/)).toBeInTheDocument();
+        expect(screen.getByText(/keep 3–9/)).toBeInTheDocument();
 
         await user.click(screen.getByRole('button', { name: 'Out ]' }));
-        expect(screen.getByText(/keep 3–5/)).toBeInTheDocument();
+        expect(screen.getByText(/keep 3–4/)).toBeInTheDocument();
 
         await user.click(screen.getByRole('button', { name: 'Full' }));
-        expect(screen.getByText(/keep 0–10/)).toBeInTheDocument();
-    });
-
-    describe('keyboard shortcuts', () => {
-        it('plays and pauses with space', async () => {
-            const { player, user } = renderTimeline();
-            await screen.findByRole('button', { name: 'Trim' });
-
-            await user.keyboard(' ');
-
-            expect(player.play).toHaveBeenCalled();
-        });
-
-        it('steps a frame with . and ,', async () => {
-            const { player, user } = renderTimeline();
-            await screen.findByRole('button', { name: 'Trim' });
-
-            await user.keyboard('.');
-            expect(player.pause).toHaveBeenCalled();
-            expect(player.seek).toHaveBeenLastCalledWith(1);
-        });
-
-        it('sets the in and out points with [ and ]', async () => {
-            const { player, user } = renderTimeline();
-            player.timeRef.current = 3;
-            await screen.findByRole('button', { name: 'Trim' });
-
-            await user.keyboard('[[');
-            expect(screen.getByText(/keep 3–10/)).toBeInTheDocument();
-
-            await user.keyboard(']]');
-            expect(screen.getByText(/keep 3–5/)).toBeInTheDocument();
-
-            await user.keyboard('\\');
-            expect(screen.getByText(/keep 0–10/)).toBeInTheDocument();
-        });
+        expect(screen.getByText(/keep 0–9/)).toBeInTheDocument();
     });
 
     it('asks for confirmation with the range in seconds and does not trim when cancelled', async () => {

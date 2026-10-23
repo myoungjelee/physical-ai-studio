@@ -24,8 +24,10 @@ const secondsFormatter = new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 2,
 });
 
+export const formatSeconds = (seconds: number): string => secondsFormatter.format(seconds);
+
 export const formatTrimRangeLabel = (range: TrimRange, fps: number): string =>
-    `${secondsFormatter.format(range.start / fps)} – ${secondsFormatter.format(range.end / fps)}`;
+    `${formatSeconds(range.start / fps)} – ${formatSeconds(range.end / fps)}`;
 
 export const suggestTrimRange = (actions: number[][], actionKeys: string[], fps: number): TrimRange | undefined => {
     const posColumns = actionKeys.flatMap((key, column) => (key.endsWith('.pos') ? [column] : []));
