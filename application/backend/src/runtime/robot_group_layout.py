@@ -5,6 +5,7 @@ responsibility of the runtime; keeping this pure makes it easy to test.
 """
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Sequence
 
 
@@ -41,12 +42,18 @@ class RobotGroupLayout:
             reading = positions[member.key]
             if len(reading) != len(member.joint_names):
                 raise ValueError(f"Joint count mismatch for member {member.key!r}")
-            values.extend(float(value) for value in reading)
+            for value in reading:
+                converted = float(value)
+                if not isfinite(converted):
+                    raise ValueError(f"Non-finite joint reading for member {member.key!r}")
+                values.append(converted)
         return tuple(values)
 
     def split(self, values: Sequence[float]) -> dict[str, tuple[float, ...]]:
         if len(values) != len(self.joint_names):
             raise ValueError("Action dimension does not match robot group layout")
+        if any(not isfinite(float(value)) for value in values):
+            raise ValueError("Action contains non-finite joint values")
         result: dict[str, tuple[float, ...]] = {}
         start = 0
         for member in self.members:
