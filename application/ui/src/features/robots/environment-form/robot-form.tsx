@@ -226,7 +226,7 @@ export const RobotForm = () => {
                         }
                     />
                 </Well>
-            ) : environmentForm.robots.length === 0 ? (
+            ) : (
                 <Button
                     variant='secondary'
                     UNSAFE_className={addResourceButtonClasses.addResourceButton}
@@ -238,7 +238,7 @@ export const RobotForm = () => {
                     <Icon marginEnd='size-50'>
                         <Add />
                     </Icon>
-                    Robot
+                    Add robot pair
                 </Button>
             ) : null}
         </>

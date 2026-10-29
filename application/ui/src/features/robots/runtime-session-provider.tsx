@@ -81,6 +81,11 @@ type RuntimeSessionContextValue = {
 const RuntimeSessionContext = createContext<RuntimeSessionContextValue | null>(null);
 
 const handshakeDevices = (environment: SchemaEnvironmentWithRelations) => {
+    if ((environment.robots?.length ?? 0) > 1) {
+        throw new Error(
+            'Multi-robot control is not available yet. This environment contains multiple followers; recording or inference must not silently use only the first one.'
+        );
+    }
     const follower = environment.robots?.[0];
     if (follower === undefined) {
         throw new Error('Cannot start a runtime session without a follower robot.');

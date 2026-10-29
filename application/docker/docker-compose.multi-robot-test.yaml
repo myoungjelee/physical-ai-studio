@@ -1,0 +1,10 @@
+# Development-only overlay; separate project name isolates network and volume.
+services:
+  physical-ai-studio-cuda:
+    container_name: physical-ai-studio-multi-robot-test
+    image: physical-ai-studio-multi-robot-test:local
+    group_add: !override
+      - "${DIALOUT_GID:-20}"
+      - "${PLUGDEV_GID:-46}"
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-990}"
