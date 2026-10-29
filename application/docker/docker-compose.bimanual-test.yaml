@@ -1,0 +1,6 @@
+# Use together with docker-compose.yaml. Do not deploy with the production project name.
+# The base file's named storage volume is isolated by the compose project name.
+services:
+  physical-ai-studio-cuda:
+    container_name: physical-ai-studio-bimanual-test
+    image: physical-ai-studio-bimanual-test:local

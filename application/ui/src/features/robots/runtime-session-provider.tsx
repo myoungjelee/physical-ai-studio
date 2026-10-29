@@ -81,6 +81,11 @@ type RuntimeSessionContextValue = {
 const RuntimeSessionContext = createContext<RuntimeSessionContextValue | null>(null);
 
 const handshakeDevices = (environment: SchemaEnvironmentWithRelations) => {
+    if (environment.robots && environment.robots.length > 1) {
+        throw new Error(
+            'Runtime sessions support exactly one logical follower. For two SO-101 arms, create a Bimanual SO101 Follower and Bimanual SO101 Leader instead of adding two independent pairs.'
+        );
+    }
     const follower = environment.robots?.[0];
     if (follower === undefined) {
         throw new Error('Cannot start a runtime session without a follower robot.');
