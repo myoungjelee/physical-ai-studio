@@ -4,3 +4,10 @@ services:
   physical-ai-studio-cuda:
     container_name: physical-ai-studio-bimanual-test
     image: physical-ai-studio-bimanual-test:local
+    # Base Compose uses group names; container group files may not include render.
+    # Override rather than merge the sequence, using host numeric GIDs.
+    group_add: !override
+      - "${DIALOUT_GID:-20}"
+      - "${PLUGDEV_GID:-46}"
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-990}"
