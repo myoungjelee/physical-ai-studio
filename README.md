@@ -16,7 +16,7 @@
 
 This fork includes a custom **Models → Import model** ZIP upload workflow and USB-ready CPU/GPU Docker installer scripts. These additions are not part of the upstream installation instructions above. The current distribution package (including its Korean usage guide) is maintained separately at:
 
-`/home/circulus/Downloads/physical-ai-studio-bimanual/README.md`
+[SO-101 양팔 커스텀 배포 및 사용 가이드](docs/custom-so101-bimanual.md)
 
 The distributable uses `physical-ai-studio-bimanual:latest` with an `IMAGE-ID` verification file; existing `/app/storage` named volumes are retained when replacing containers. **Do not delete the volume or a robot-PC deployment folder containing an `ACT/` directory.** See also [model import policy notes](application/docs/06-training-policies.md).
 
