@@ -7,6 +7,7 @@ import { SchemaModel } from '../../api/openapi-spec';
 import { useJobCache } from '../jobs/use-job-cache';
 import { LogsDialog } from '../logs/logs-dialog';
 import { useProjectId } from '../projects/use-project';
+import { ImportModelDialog } from './import-model-dialog';
 import { JobList } from './job-table/job-list';
 import { ModelsList } from './models-table/models-list';
 import { NoModelsPlaceholder } from './no-models-placeholder';
@@ -44,23 +45,27 @@ export const ModelsPage = () => {
     return (
         <View height='100%' padding={'size-300'} UNSAFE_style={{ overflowY: 'auto' }}>
             <Flex direction={'column'} height={'100%'}>
+                <Flex justifyContent={'end'} alignItems='center' gap='size-200'>
+                    <DialogTrigger>
+                        <Button variant='secondary'>Import model</Button>
+                        {(close) => <ImportModelDialog onClose={close} />}
+                    </DialogTrigger>
+                    <DialogTrigger>
+                        <Button variant='accent'>Train model</Button>
+                        {(close) => (
+                            <TrainModelDialog
+                                close={(job) => {
+                                    if (job) addJob(job);
+                                    close();
+                                }}
+                            />
+                        )}
+                    </DialogTrigger>
+                </Flex>
                 {showIllustratedMessage ? (
                     <NoModelsPlaceholder onJobCreated={addJob} />
                 ) : (
                     <Flex direction={'column'} flex={1} gap={'size-300'} minHeight={0}>
-                        <Flex justifyContent={'end'} alignItems={'center'}>
-                            <DialogTrigger>
-                                <Button variant='accent'>Train model</Button>
-                                {(close) => (
-                                    <TrainModelDialog
-                                        close={(job) => {
-                                            if (job) addJob(job);
-                                            close();
-                                        }}
-                                    />
-                                )}
-                            </DialogTrigger>
-                        </Flex>
                         <Divider size={'S'} />
                         <Flex
                             direction={'column'}

@@ -111,3 +111,16 @@ docker compose up -d --force-recreate
 ## Next
 
 - Run/deploy in UI: [Deploying Model Policies](./08-deploying-model-policies.md).
+
+## Importing a model exported from another Studio installation
+
+On the target Studio instance, open the project and select **Models → Import model**.
+Choose the model ZIP downloaded via **Models → Download** on the source system, enter a name,
+and select the target project's dataset that represents the same robot environment used for training.
+Click **Import model**. Studio validates the archive, extracts it to temporary storage, and registers
+its policy and available inference exports. This requires an existing dataset; importing the model
+does not import its training dataset or robot hardware configuration.
+
+The importer accepts the full model ZIP (with `model.ckpt` and `exports/<backend>/manifest.json`),
+including a ZIP containing one enclosing model directory. Invalid or unsafe archives are rejected.
+Existing models, datasets and Docker storage volumes are not replaced.

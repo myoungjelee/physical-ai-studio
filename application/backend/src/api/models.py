@@ -1,19 +1,24 @@
 import asyncio
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
+from zipfile import BadZipFile
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.exceptions import HTTPException
 from fastapi.responses import FileResponse
 from physicalai.config import Config
+from physicalai.data.archive_safety import InvalidArchiveError as ZipArchiveError
+from physicalai.data.archive_safety import SafeZipArchive, ZipBombDetectedError
 from physicalai.export.backends import ExportBackend
 from sse_starlette import EventSourceResponse
 from starlette import status
 from starlette.background import BackgroundTask
 
 from api.dependencies import (
+    AsyncSessionDep,
     EnvironmentServiceDep,
     get_dataset_service,
     get_job_service,
@@ -25,7 +30,7 @@ from api.dependencies import (
     get_robot_manager_service,
 )
 from api.utils import safe_archive_name
-from exceptions import ResourceNotFoundError, ResourceType
+from exceptions import InvalidArchiveError, ResourceNotFoundError, ResourceType
 from internal_datasets.utils import get_internal_read_dataset
 from robots.robot_client_factory import RobotClientFactory
 from runtime.config_builder import (
@@ -36,11 +41,79 @@ from runtime.config_builder import (
     runtime_export_readme,
 )
 from schemas import Model, ModelDetailResponse
+from schemas.dataset import Dataset
 from schemas.job import TrainJob
 from services import DatasetService, JobService, ModelDownloadService, ModelMetricsService, ModelService
 from services.environment_service import EnvironmentService
+from services.model_import_service import ModelImportService
+from settings import get_settings
 
 router = APIRouter(prefix="/api/models", tags=["Models"])
+
+
+@router.post("/import", status_code=status.HTTP_201_CREATED)
+async def import_model_zip(
+    session: AsyncSessionDep,
+    project_id: Annotated[UUID, Form()],
+    dataset_id: Annotated[UUID, Form()],
+    model_name: Annotated[str, Form(min_length=1, max_length=200)],
+    archive: Annotated[UploadFile, File()],
+) -> Model:
+    """Import a Studio-exported model ZIP into an existing project/dataset."""
+    if not archive.filename or not archive.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Select a model ZIP file")
+
+    settings = get_settings()
+    # Keep staging files on the storage volume, allowing large local model ZIPs.
+    staging_root = settings.storage_dir / "cache" / "imports" / "models"
+    staging_root.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="model-", dir=staging_root) as temp:
+        archive_path = Path(temp) / "upload.zip"
+        uploaded = 0
+        with archive_path.open("wb") as destination:
+            while chunk := await archive.read(8 * 1024 * 1024):
+                uploaded += len(chunk)
+                if uploaded > settings.data_import_max_upload_bytes:
+                    raise HTTPException(status_code=413, detail="Model ZIP exceeds the upload limit")
+                await asyncio.to_thread(destination.write, chunk)
+        await archive.close()
+
+        extracted = Path(temp) / "extracted"
+        extracted.mkdir()
+        safe_zip = SafeZipArchive(
+            archive_path,
+            max_uncompressed_bytes=settings.data_import_max_uncompressed_bytes,
+        )
+        try:
+            await asyncio.to_thread(safe_zip.extract_to, extracted, min_free_bytes=settings.data_import_min_free_bytes)
+        except (ZipArchiveError, ZipBombDetectedError, BadZipFile) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid model ZIP: {exc}") from exc
+
+        # Allow archives containing a single enclosing model directory.
+        source = extracted
+        if not (source / "model.ckpt").is_file() and not (source / "torch" / "manifest.json").is_file():
+            children = list(source.iterdir())
+            if len(children) == 1 and children[0].is_dir():
+                source = children[0]
+
+        async def get_dataset(item_id: UUID) -> Dataset:
+            return await DatasetService(session).get_dataset_by_id(item_id)
+
+        async def persist(job: TrainJob, model: Model) -> Model:
+            saved_job = await JobService(session).create_job(job)
+            return await ModelService(session).create_model(model.model_copy(update={"train_job_id": saved_job.id}))
+
+        service = ModelImportService(get_dataset=get_dataset, persist_import=persist)
+        try:
+            return await service.import_model_directory(
+                source_dir=source,
+                project_id=project_id,
+                dataset_id=dataset_id,
+                model_name=model_name.strip(),
+            )
+        except InvalidArchiveError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def _runtime_recipe_texts(
