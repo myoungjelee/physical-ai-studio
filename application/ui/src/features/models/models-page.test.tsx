@@ -2,7 +2,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse } from 'msw';
 
-import { SchemaTrainJob } from '../../api/openapi-spec';
+import { SchemaModel, SchemaTrainJob } from '../../api/openapi-spec';
 import { http } from '../../api/utils';
 import { server } from '../../msw-node-setup';
 import { getMockedTrainJob } from '../../test-utils/mocks/mock-train-job';
@@ -144,7 +144,9 @@ describe('ModelsPage - Current Training', () => {
 
         renderPage();
 
-        await user.click(await screen.findByRole('button', { name: 'Train model' }));
+        // The toolbar and empty-state illustration both have a Train model button.
+        const trainButtons = await screen.findAllByRole('button', { name: 'Train model' });
+        await user.click(trainButtons[trainButtons.length - 1]);
         await user.click(await screen.findByRole('button', { name: /select…/i }));
         await user.click(await screen.findByRole('option', { name: 'Test dataset' }));
         // Training is submitted from the last wizard step, so walk there first.
@@ -155,6 +157,66 @@ describe('ModelsPage - Current Training', () => {
 
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
         expect(await screen.findByText('pending-model')).toBeInTheDocument();
+    });
+});
+
+describe('ModelsPage - Model metadata', () => {
+    beforeEach(() => {
+        rs.stubGlobal('WebSocket', FakeWebSocket);
+        rs.stubGlobal('EventSource', ImmediatelyClosingEventSource);
+    });
+
+    afterEach(() => {
+        rs.unstubAllGlobals();
+    });
+
+    it('searches model names, descriptions and tags without hiding unrelated training records', async () => {
+        const user = userEvent.setup();
+        mockApi([]);
+        const base: SchemaModel = {
+            id: 'model-1',
+            name: 'ACT Left',
+            description: 'Shadow comparison',
+            tags: ['left'],
+            path: '/models/model-1',
+            policy: 'act',
+            properties: {},
+            project_id: projectId,
+            dataset_id: null,
+            snapshot_id: null,
+            train_job_id: null,
+            parent_model_id: null,
+            version: 1,
+            created_at: '2026-11-01T12:00:00Z',
+            available_backends: [],
+            lora_enabled: false,
+            lora_use_dora: false,
+            snapflow_enabled: false,
+        };
+        server.use(
+            http.get('/api/projects/{project_id}/models', () =>
+                HttpResponse.json([
+                    base,
+                    {
+                        ...base,
+                        id: 'model-2',
+                        name: 'ACT Right',
+                        description: 'Control experiment',
+                        tags: ['right'],
+                        path: '/models/model-2',
+                    },
+                ])
+            )
+        );
+
+        renderPage();
+        expect(await screen.findByText('ACT Left')).toBeInTheDocument();
+        expect(screen.getByText('ACT Right')).toBeInTheDocument();
+
+        await user.type(screen.getByRole('textbox', { name: 'Search models' }), 'shadow');
+        expect(screen.getByText('ACT Left')).toBeInTheDocument();
+        expect(screen.queryByText('ACT Right')).not.toBeInTheDocument();
+        expect(screen.getByText('1 / 2 models')).toBeInTheDocument();
     });
 });
 

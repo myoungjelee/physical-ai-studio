@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator
 
 from schemas.base import BaseIDModel, Field, UTCDatetime
 
@@ -15,6 +15,8 @@ SNAPFLOW_PROPERTY = "snapflow_enabled"
 
 class Model(BaseIDModel):
     name: str
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
     path: str
     policy: str
     properties: dict
@@ -92,6 +94,30 @@ class Model(BaseIDModel):
             }
         }
     )
+
+
+class ModelMetadataUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    tags: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Model name cannot be blank")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value or len(value) > 40 for value in cleaned):
+            raise ValueError("Tags must contain 1-40 characters")
+        if len({value.casefold() for value in cleaned}) != len(cleaned):
+            raise ValueError("Duplicate tags are not allowed")
+        return cleaned
 
 
 class IOFeature(BaseModel):

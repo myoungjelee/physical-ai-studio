@@ -43,12 +43,39 @@ from runtime.config_builder import (
 from schemas import Model, ModelDetailResponse
 from schemas.dataset import Dataset
 from schemas.job import TrainJob
+from schemas.model import ModelMetadataUpdate
 from services import DatasetService, JobService, ModelDownloadService, ModelMetricsService, ModelService
 from services.environment_service import EnvironmentService
 from services.model_import_service import ModelImportService
 from settings import get_settings
 
 router = APIRouter(prefix="/api/models", tags=["Models"])
+
+
+@router.patch("/{model_id}")
+async def update_model_metadata(
+    model_id: UUID,
+    payload: ModelMetadataUpdate,
+    model_service: Annotated[ModelService, Depends(get_model_service)],
+) -> Model:
+    """Edit user-facing metadata without modifying checkpoints or training lineage."""
+    model = await model_service.get_model_by_id(model_id)
+    return await model_service.update_model_metadata(model, payload.model_dump())
+
+
+@router.get("/{model_id}/diagnostics/{recording_id}")
+async def download_inference_diagnostics(model_id: UUID, recording_id: UUID) -> FileResponse:
+    """Download a per-tick inference trace scoped to the requested model UUID."""
+    path = get_settings().storage_dir / "diagnostics" / str(model_id) / f"{recording_id}.csv"
+    if not path.is_file():
+        # A stopped capture is finalized off the robot control thread.
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if path.is_file():
+                break
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Diagnostic recording not found")
+    return FileResponse(path, filename=f"inference-{recording_id}.csv", media_type="text/csv")
 
 
 @router.post("/import", status_code=status.HTTP_201_CREATED)

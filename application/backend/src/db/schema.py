@@ -221,6 +221,8 @@ class ModelDB(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags: Mapped[list[str]] = mapped_column(JSON(), nullable=False, default=list)
     path: Mapped[str] = mapped_column(String(255), nullable=False)
     policy: Mapped[str] = mapped_column(String(255), nullable=False)
     properties: Mapped[JSON] = mapped_column(JSON(), nullable=False)

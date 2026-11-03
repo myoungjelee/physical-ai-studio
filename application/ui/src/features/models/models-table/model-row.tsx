@@ -22,12 +22,14 @@ export const ModelRow = ({
     onDelete,
     onRetrain,
     onViewLogs,
+    onEdit,
 }: {
     model: SchemaModel;
     trainingJob?: SchemaTrainJob;
     onDelete: () => void;
     onRetrain: () => void;
     onViewLogs?: () => void;
+    onEdit?: () => void;
 }) => {
     const [isDownloadDialogOpen, setDownloadDialogOpen] = useState(false);
     const { data: dataset } = useDatasetQuery(model.dataset_id);
@@ -49,6 +51,9 @@ export const ModelRow = ({
         if (action === 'download') {
             setDownloadDialogOpen(true);
         }
+        if (action === 'edit') {
+            onEdit?.();
+        }
     };
 
     const duration =
@@ -63,11 +68,19 @@ export const ModelRow = ({
 
     return (
         <Table.ExpandableRow id={model.id} label={model.name} detail={<ModelRowContent model={model} />}>
-            <Flex alignItems='center' gap='size-100'>
-                <Text>{model.name}</Text>
-                {version > 1 && <Text UNSAFE_className={classes.versionBadge}>v{version}</Text>}
-                <PeftBadge isEnabled={model.lora_enabled} isDora={model.lora_use_dora} />
-                <SnapflowBadge isEnabled={model.snapflow_enabled} />
+            <Flex direction='column' gap='size-50'>
+                <Flex alignItems='center' gap='size-100'>
+                    <Text>{model.name}</Text>
+                    <Text UNSAFE_className={classes.versionBadge}>v{version}</Text>
+                    <PeftBadge isEnabled={model.lora_enabled} isDora={model.lora_use_dora} />
+                    <SnapflowBadge isEnabled={model.snapflow_enabled} />
+                </Flex>
+                {model.description && <Text UNSAFE_className={classes.modelNote}>{model.description}</Text>}
+                {(model.tags ?? []).length > 0 && (
+                    <Text UNSAFE_className={classes.modelTags}>
+                        {(model.tags ?? []).map((tag) => `#${tag}`).join(' ')}
+                    </Text>
+                )}
             </Flex>
             <Text>{model.policy.toUpperCase()}</Text>
             <Text data-testid='dataset-cell'>{dataset?.name ?? '-'}</Text>
@@ -87,6 +100,7 @@ export const ModelRow = ({
                         <MoreMenu />
                     </ActionButton>
                     <Menu onAction={onAction} disabledKeys={disabledKeys}>
+                        <Item key='edit'>Edit model</Item>
                         <Item key='logs'>Logs</Item>
                         <Item key='download'>Download</Item>
                         <Item key='retrain'>Retrain</Item>

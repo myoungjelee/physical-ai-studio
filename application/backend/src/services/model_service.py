@@ -32,6 +32,9 @@ class ModelService:
     async def update_model(self, model: Model, update: dict) -> Model:
         return await self.repo.update(model, update)
 
+    async def update_model_metadata(self, model: Model, metadata: dict) -> Model:
+        return await self.repo.update_metadata(model.id, metadata)
+
     async def delete_model(self, model: Model) -> None:
         snapshot_repo = SnapshotRepository(self.session)
         await self.repo.delete_by_id(model.id)

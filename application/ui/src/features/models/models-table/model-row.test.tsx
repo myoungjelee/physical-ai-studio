@@ -36,6 +36,8 @@ class ImmediatelyClosingEventSource extends EventTarget {
 const model: SchemaModel = {
     id: 'model-1',
     name: 'pick-and-place',
+    description: '',
+    tags: [],
     path: '/models/pick-and-place',
     policy: 'act',
     properties: {},
@@ -83,12 +85,14 @@ const renderModelRow = ({
     onDelete = rs.fn(),
     onRetrain = rs.fn(),
     onViewLogs = rs.fn(),
+    onEdit = rs.fn(),
 }: {
     modelOverride?: Partial<SchemaModel>;
     trainingJobOverride?: SchemaTrainJob;
     onDelete?: () => void;
     onRetrain?: () => void;
     onViewLogs?: () => void;
+    onEdit?: () => void;
 } = {}) => {
     return render(
         <ModelRow
@@ -97,6 +101,7 @@ const renderModelRow = ({
             onDelete={onDelete}
             onRetrain={onRetrain}
             onViewLogs={onViewLogs}
+            onEdit={onEdit}
         />
     );
 };
@@ -131,7 +136,9 @@ describe('ModelRow', () => {
     });
 
     it('falls back to the — placeholder when the training job has no start/end time', () => {
-        renderModelRow({ trainingJobOverride: { ...trainingJob, start_time: null, end_time: null } });
+        renderModelRow({
+            trainingJobOverride: { ...trainingJob, start_time: null, end_time: null },
+        });
 
         expect(screen.getByText('—')).toBeInTheDocument();
     });
@@ -150,25 +157,47 @@ describe('ModelRow', () => {
     });
 
     it('renders a LoRA badge when lora_enabled is true', () => {
-        renderModelRow({ modelOverride: { lora_enabled: true, lora_use_dora: false } });
+        renderModelRow({
+            modelOverride: { lora_enabled: true, lora_use_dora: false },
+        });
 
         expect(screen.getByText('LoRA')).toBeInTheDocument();
     });
 
     it('renders a DoRA badge when lora_use_dora is true', () => {
-        renderModelRow({ modelOverride: { lora_enabled: true, lora_use_dora: true } });
+        renderModelRow({
+            modelOverride: { lora_enabled: true, lora_use_dora: true },
+        });
 
         expect(screen.getByText('DoRA')).toBeInTheDocument();
     });
 
-    it('renders the v{n} suffix only when version > 1', () => {
+    it('renders the current version for each model', () => {
         renderModelRow({ modelOverride: { version: 1 } });
 
-        expect(screen.queryByText(/^v\d+$/)).not.toBeInTheDocument();
+        expect(screen.getByText('v1')).toBeInTheDocument();
 
         renderModelRow({ modelOverride: { version: 2 } });
 
         expect(screen.getByText('v2')).toBeInTheDocument();
+    });
+
+    it('shows the model description and tags without expanding the row', () => {
+        renderModelRow({ modelOverride: { description: 'Left shadow experiment', tags: ['shadow', 'left'] } });
+
+        expect(screen.getByText('Left shadow experiment')).toBeInTheDocument();
+        expect(screen.getByText('#shadow #left')).toBeInTheDocument();
+    });
+
+    it('opens model editing from the overflow menu', async () => {
+        const user = userEvent.setup();
+        const onEdit = rs.fn();
+        renderModelRow({ onEdit });
+
+        await user.click(screen.getByRole('button', { name: 'options' }));
+        await user.click(screen.getByRole('menuitem', { name: 'Edit model' }));
+
+        expect(onEdit).toHaveBeenCalledOnce();
     });
 
     it('renders the Dataset and Environment names', async () => {
@@ -182,7 +211,10 @@ describe('ModelRow', () => {
         const datasetHandler = rs.fn(() => HttpResponse.error());
         server.use(http.get('/api/dataset/{dataset_id}', datasetHandler));
 
-        renderModelRow({ modelOverride: { dataset_id: null }, trainingJobOverride: trainingJob });
+        renderModelRow({
+            modelOverride: { dataset_id: null },
+            trainingJobOverride: trainingJob,
+        });
 
         expect(await screen.findByTestId('dataset-cell')).toHaveTextContent('-');
         expect(screen.getByTestId('environment-cell')).toHaveTextContent('-');
@@ -296,7 +328,11 @@ describe('ModelRow', () => {
 
     it('two rows can be expanded simultaneously', async () => {
         const user = userEvent.setup();
-        const secondModel: SchemaModel = { ...model, id: 'model-2', name: 'stack-blocks' };
+        const secondModel: SchemaModel = {
+            ...model,
+            id: 'model-2',
+            name: 'stack-blocks',
+        };
 
         render(
             <>
@@ -327,7 +363,9 @@ describe('ModelRow', () => {
         const user = userEvent.setup();
         renderModelRow();
 
-        const disclosureButton = screen.getByRole('button', { name: 'Show details for pick-and-place' });
+        const disclosureButton = screen.getByRole('button', {
+            name: 'Show details for pick-and-place',
+        });
         expect(disclosureButton).toHaveAttribute('aria-expanded', 'false');
 
         await user.click(disclosureButton);

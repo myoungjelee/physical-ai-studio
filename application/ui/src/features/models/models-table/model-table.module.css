@@ -6,3 +6,21 @@
     color: var(--spectrum-gray-600);
     font-size: var(--spectrum-global-dimension-static-font-size-75);
 }
+
+.modelNote,
+.modelTags {
+    display: block;
+    max-width: 24rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--spectrum-global-dimension-static-font-size-75);
+}
+
+.modelNote {
+    color: var(--spectrum-global-color-gray-700);
+}
+
+.modelTags {
+    color: var(--spectrum-global-color-blue-700);
+}
