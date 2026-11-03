@@ -22,7 +22,9 @@ export interface ExportSelection {
  * ExecuTorch, the VLA policies only to Torch and OpenVINO — so the list comes
  * from the backend rather than being hardcoded here.
  */
-export const useExportBackends = (policy: string, remoteTrainerId?: string): ExportSelection => {
+export const useExportBackends = (
+    policy: string, remoteTrainerId?: string, visionBackbone: string = 'resnet18'
+): ExportSelection => {
     const {
         data: backendsByPolicy,
         isLoading,
@@ -35,8 +37,12 @@ export const useExportBackends = (policy: string, remoteTrainerId?: string): Exp
     );
 
     const backends = useMemo(
-        () => (backendsByPolicy?.[policy] ?? []).filter(isExportBackend).map((backend) => INFERENCE_BACKENDS[backend]),
-        [backendsByPolicy, policy]
+        () =>
+            (backendsByPolicy?.[policy] ?? [])
+                .filter(isExportBackend)
+                .filter((backend) => policy !== 'act' || !visionBackbone.startsWith('dinov2_') || backend === 'torch')
+                .map((backend) => INFERENCE_BACKENDS[backend]),
+        [backendsByPolicy, policy, visionBackbone]
     );
 
     const [selectedBackends, setSelectedBackends] = useState<SchemaExportBackendOutput[]>([]);

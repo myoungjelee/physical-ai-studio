@@ -103,6 +103,7 @@ class TrainJobPayloadBase(BaseModel):
     dataset_id: UUID
     policy: str
     model_name: str
+    vision_backbone: Literal["resnet18", "dinov2_small", "dinov2_base"] = "resnet18"
     max_epochs: int | None = Field(
         default=None,
         ge=1,

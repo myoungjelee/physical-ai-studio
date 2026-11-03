@@ -110,6 +110,7 @@ class TrainingJobSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     policy: str = Field(description="Policy name, e.g. 'act', 'pi05', 'molmoact2', or 'smolvla'.")
+    vision_backbone: Literal["resnet18", "dinov2_small", "dinov2_base"] = "resnet18"
     policy_source: Literal["physicalai", "lerobot"] = Field(
         default="physicalai",
         description="Which implementation of the policy to train.",
@@ -252,6 +253,11 @@ def build_policy(spec: TrainingJobSpec, *, resume_from: Path | str | None = None
     from physicalai.policies import get_policy
 
     kwargs: dict[str, Any] = {"compile_model": spec.compile_model}
+    if spec.policy.lower() == "act" and spec.policy_source == "physicalai":
+        kwargs["vision_backbone"] = spec.vision_backbone
+        if spec.vision_backbone.startswith("dinov2_"):
+            kwargs["image_size"] = (224, 224)
+            kwargs["pretrained_backbone_weights"] = None
     if spec.policy_source == "physicalai":
         pretrained = PRETRAINED_BASE_CHECKPOINTS.get(spec.policy.lower())
         if pretrained is not None:
@@ -437,7 +443,18 @@ def run_training_job(
         _detach_trainer(policy, trainer)
         del trainer, datamodule, policy
         _release_memory()
-        _export(export_policy, output_dir, report, spec.export_backends)
+        # On a resumed run the checkpoint, not the submitted default, determines
+        # the architecture. Inspect the restored policy to avoid tracing a DINO
+        # backbone through export formats not yet verified for it.
+        actual_backbone = getattr(getattr(export_policy, "config", None), "vision_backbone", "resnet18")
+        requested_exports = (
+            ["torch"]
+            if spec.policy.lower() == "act"
+            and isinstance(actual_backbone, str)
+            and actual_backbone.startswith("dinov2_")
+            else spec.export_backends
+        )
+        _export(export_policy, output_dir, report, requested_exports)
 
 
 def _build_snapflow_callback(spec: TrainingJobSpec) -> Any:

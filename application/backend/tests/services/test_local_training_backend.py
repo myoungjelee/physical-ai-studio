@@ -152,6 +152,12 @@ class TestBuildSpec:
         assert spec.export_backends is None
         assert (spec.image_key_reorder_map, spec.num_cameras) == ({}, 0)
 
+    @pytest.mark.parametrize("variant", ["resnet18", "dinov2_small", "dinov2_base"])
+    def test_act_vision_backbone_choice_is_forwarded(self, tmp_path, variant):
+        spec = build_spec(_context(tmp_path, _payload(vision_backbone=variant)))
+
+        assert spec.vision_backbone == variant
+
     @pytest.mark.parametrize("augment_images", [True, False])
     def test_image_augmentation_choice_is_forwarded(self, tmp_path, augment_images):
         spec = build_spec(_context(tmp_path, _payload(augment_images=augment_images)))

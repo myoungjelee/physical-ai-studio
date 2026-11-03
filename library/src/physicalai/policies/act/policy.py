@@ -51,7 +51,7 @@ class ACT(ExportablePolicyMixin, Policy):
         chunk_size: Size of the action prediction chunk in environment steps.
         n_action_steps: Number of action steps to execute per policy invocation.
             Should be no greater than ``chunk_size``.
-        vision_backbone: Name of the torchvision ResNet backbone for encoding images.
+        vision_backbone: ResNet or DINOv2 backbone for encoding images.
         pretrained_backbone_weights: Pretrained weights for the vision backbone.
             ``None`` means no pretrained weights.
         replace_final_stride_with_dilation: Whether to replace the ResNet's final
@@ -296,6 +296,8 @@ class ACT(ExportablePolicyMixin, Policy):
         self,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]],
         weights_file: Path | None = None,
+        *,
+        load_pretrained_dino: bool = False,
     ) -> None:
         """Initialize model and preprocessors.
 
@@ -305,6 +307,7 @@ class ACT(ExportablePolicyMixin, Policy):
             dataset_stats: Dataset normalization statistics.
             weights_file: Optional path to a LeRobot ``model.safetensors`` checkpoint to load
                 pretrained weights from, after the model architecture is built.
+            load_pretrained_dino: Load Hub DINO weights on a new run, not when restoring a checkpoint.
 
         Raises:
             RuntimeError: If unexpected keys are found when loading pretrained weights.
@@ -335,6 +338,7 @@ class ACT(ExportablePolicyMixin, Policy):
             chunk_size=self.config.chunk_size,
             n_action_steps=self.config.n_action_steps,
             vision_backbone=self.config.vision_backbone,
+            load_pretrained_dino=load_pretrained_dino,
             pretrained_backbone_weights=self.config.pretrained_backbone_weights,
             replace_final_stride_with_dilation=self.config.replace_final_stride_with_dilation,
             pre_norm=self.config.pre_norm,
@@ -403,7 +407,7 @@ class ACT(ExportablePolicyMixin, Policy):
 
         self.hparams["dataset_stats"] = stats_dict
 
-        self._initialize_model(stats_dict)
+        self._initialize_model(stats_dict, load_pretrained_dino=True)
 
         reformat_dataset_to_match_policy(self, datamodule)
 

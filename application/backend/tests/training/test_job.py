@@ -155,7 +155,21 @@ class TestBuildPolicy:
             policy = build_policy(TrainingJobSpec(policy="act", compile_model=True))
 
         assert policy is get_policy.return_value
-        get_policy.assert_called_once_with("act", source="physicalai", compile_model=True)
+        get_policy.assert_called_once_with("act", source="physicalai", compile_model=True, vision_backbone="resnet18")
+
+    @pytest.mark.parametrize("variant", ["dinov2_small", "dinov2_base"])
+    def test_dino_act_selects_pretrained_backbone(self, variant: str) -> None:
+        with patch("physicalai.policies.get_policy") as get_policy:
+            build_policy(TrainingJobSpec(policy="act", vision_backbone=variant))
+
+        kwargs = get_policy.call_args.kwargs
+        assert kwargs["vision_backbone"] == variant
+        assert kwargs["image_size"] == (224, 224)
+        assert kwargs["pretrained_backbone_weights"] is None
+
+    def test_invalid_vision_backbone_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="vision_backbone"):
+            TrainingJobSpec(policy="act", vision_backbone="dinov2_extra")
 
     @pytest.mark.parametrize("policy_name", sorted(PRETRAINED_BASE_CHECKPOINTS))
     def test_finetune_only_policies_start_from_pretrained_weights(self, policy_name: str) -> None:

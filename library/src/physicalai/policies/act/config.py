@@ -48,7 +48,7 @@ class ACTConfig(Config):
             This should be no greater than the chunk size. For example, if the chunk size size 100, you may
             set this to 50. This would mean that the model predicts 100 steps worth of actions, runs 50 in the
             environment, and throws the other 50 out.
-        vision_backbone: Name of the torchvision resnet backbone to use for encoding images.
+        vision_backbone: ResNet or DINOv2 variant used to encode visual observations.
         pretrained_backbone_weights: Pretrained weights from torchvision to initialize the backbone.
             `None` means no pretrained weights.
         replace_final_stride_with_dilation: Whether to replace the ResNet's final 2x2 stride with a dilated

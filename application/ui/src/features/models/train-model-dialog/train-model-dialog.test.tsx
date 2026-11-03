@@ -1111,6 +1111,30 @@ describe('TrainModelDialog', () => {
         expect(await screen.findByRole('slider', { name: /batch size/i })).toBeInTheDocument();
     });
 
+    it('submits the selected DINOv2 backbone when training a new ACT model', async () => {
+        const user = userEvent.setup();
+        let submitted: Record<string, unknown> | undefined;
+        mockProjectWithRemoteTrainer();
+        server.use(
+            http.post('/api/jobs:train', async ({ request }) => {
+                submitted = (await request.json()) as Record<string, unknown>;
+                return HttpResponse.json({}, { status: 201 });
+            })
+        );
+
+        renderDialog();
+        await user.click(await screen.findByRole('button', { name: /select…/i }));
+        await user.click(await screen.findByRole('option', { name: 'Test dataset' }));
+        await user.click(screen.getByRole('button', { name: 'Next' }));
+        await user.click(screen.getByRole('button', { name: /ResNet18 \(default\)/i }));
+        await user.click(await screen.findByRole('option', { name: /DINOv2-B\/14/i }));
+        await goToLastStep(user);
+        await user.click(screen.getByRole('button', { name: 'Train' }));
+
+        await waitFor(() => expect(submitted).toBeDefined());
+        expect(submitted).toMatchObject({ policy: 'act', vision_backbone: 'dinov2_base', export_backends: ['torch'] });
+    });
+
     describe('image augmentation', () => {
         const submitAndCapturePayload = async (toggle: boolean) => {
             const user = userEvent.setup();

@@ -13,8 +13,10 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import einops
@@ -71,6 +73,7 @@ class ACT(Model):
         kl_weight: float = 10.0,
         n_obs_steps: int = 1,
         compile_model: bool = False,
+        load_pretrained_dino: bool = False,
     ) -> None:
         """Initialize the ACT model.
 
@@ -102,6 +105,8 @@ class ACT(Model):
             kl_weight (float, optional): Weight for KL divergence loss in VAE. Defaults to 10.0.
             n_obs_steps (int, optional): Number of observation steps. Defaults to 1.
             compile_model (bool, optional): Whether to apply torch.compile to the model. Defaults to False.
+            load_pretrained_dino (bool, optional): Load pretrained DINO weights for a new training run.
+                False on checkpoint restoration because the checkpoint contains the weights.
 
         Raises:
             ValueError: If the number of state observation features is not exactly one.
@@ -179,7 +184,7 @@ class ACT(Model):
             self._config.normalization_mapping,
             inverse=True,
         )
-        self._model = _ACT(self._config)
+        self._model = _ACT(self._config, load_pretrained_dino=load_pretrained_dino)
 
         if compile_model:
             torch.set_float32_matmul_precision("high")
@@ -408,7 +413,7 @@ class _ACTConfig(ACTConfig):
                 exceeds chunk_size, or if n_obs_steps is not 1.
             NotImplementedError: If temporal_ensemble_coeff is used with n_action_steps > 1.
         """
-        if not self.vision_backbone.startswith("resnet"):
+        if not (self.vision_backbone.startswith("resnet") or self.vision_backbone in {"dinov2_small", "dinov2_base"}):
             msg = f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
             raise ValueError(
                 msg,
@@ -465,6 +470,53 @@ class _ACTConfig(ACTConfig):
         raise ValueError(msg)
 
 
+class _Dinov2FeatureMap(nn.Module):
+    """Frozen pretrained DINOv2 patch embeddings exposed as a 2D feature map.
+
+    Checkpoint restoration instantiates the architecture without fetching Hub
+    weights; Lightning then restores the complete backbone state dict.
+    """
+
+    def __init__(self, variant: str, *, pretrained: bool) -> None:
+        super().__init__()
+        from transformers import Dinov2Config, Dinov2Model  # noqa: PLC0415
+
+        sizes = {"dinov2_small": (384, 6, 1536), "dinov2_base": (768, 12, 3072)}
+        hidden, heads, intermediate = sizes[variant]
+        self.hidden_size = hidden
+        self.patch_size = 14
+        if pretrained:
+            repo = {"dinov2_small": "facebook/dinov2-small", "dinov2_base": "facebook/dinov2-base"}[variant]
+            # Keep first-run Hub downloads in the persistent Studio storage volume.
+            # Checkpoint loading never fetches these weights again.
+            cache_dir = os.environ.get("PAI_DINOV2_CACHE_DIR")
+            if cache_dir is None and Path("/app/storage").is_dir():
+                cache_dir = "/app/storage/model-cache/dinov2"
+            self.model = Dinov2Model.from_pretrained(repo, cache_dir=cache_dir)
+        else:
+            config = Dinov2Config(
+                image_size=518,
+                patch_size=14,
+                hidden_size=hidden,
+                num_hidden_layers=12,
+                num_attention_heads=heads,
+                intermediate_size=intermediate,
+            )
+            self.model = Dinov2Model(config)
+        self.model.requires_grad_(requires_grad=False)
+
+    def forward(self, images: Tensor) -> dict[str, Tensor]:
+        height, width = images.shape[-2:]
+        if height % self.patch_size or width % self.patch_size:
+            msg = "DINOv2 requires image height and width divisible by 14"
+            raise ValueError(msg)
+        self.model.eval()
+        with torch.no_grad():
+            tokens = self.model(pixel_values=images, interpolate_pos_encoding=True).last_hidden_state[:, 1:]
+        features = tokens.transpose(1, 2).reshape(images.shape[0], self.hidden_size, height // 14, width // 14)
+        return {"feature_map": features}
+
+
 class _ACT(nn.Module):
     """Action Chunking Transformer: The underlying neural network for ACTPolicy.
 
@@ -500,7 +552,7 @@ class _ACT(nn.Module):
                                 └───────────────────────┘
     """
 
-    def __init__(self, config: _ACTConfig) -> None:
+    def __init__(self, config: _ACTConfig, *, load_pretrained_dino: bool = False) -> None:
         # BERT style VAE encoder with input tokens [cls, robot_state, *action_sequence].
         # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__()
@@ -543,15 +595,17 @@ class _ACT(nn.Module):
 
         # Backbone for image feature extraction.
         if self.config.image_features:
-            backbone_model = getattr(torchvision.models, config.vision_backbone)(
-                replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
-                weights=config.pretrained_backbone_weights,
-                norm_layer=FrozenBatchNorm2d,
-            )
-            # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
-            # feature map).
-            # Note: The forward method of this returns a dict: {"feature_map": output}.
-            self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+            if config.vision_backbone.startswith("resnet"):
+                backbone_model = getattr(torchvision.models, config.vision_backbone)(
+                    replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
+                    weights=config.pretrained_backbone_weights,
+                    norm_layer=FrozenBatchNorm2d,
+                )
+                self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+                vision_channels = backbone_model.fc.in_features
+            else:
+                self.backbone = _Dinov2FeatureMap(config.vision_backbone, pretrained=load_pretrained_dino)
+                vision_channels = self.backbone.hidden_size
 
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = _ACTEncoder(
@@ -590,11 +644,9 @@ class _ACT(nn.Module):
             )
         self.encoder_latent_input_proj = nn.Linear(config.latent_dim, config.dim_model)
         if self.config.image_features:
-            self.encoder_img_feat_input_proj = nn.Conv2d(
-                backbone_model.fc.in_features,
-                config.dim_model,
-                kernel_size=1,
-            )
+            # A 1x1 projection is a learned linear adapter applied independently
+            # to each spatial patch, preserving the ACT feature-map interface.
+            self.encoder_img_feat_input_proj = nn.Conv2d(vision_channels, config.dim_model, kernel_size=1)
         # Transformer encoder positional embeddings.
         n_1d_tokens = 1  # for the latent
         if self.config.robot_state_feature:

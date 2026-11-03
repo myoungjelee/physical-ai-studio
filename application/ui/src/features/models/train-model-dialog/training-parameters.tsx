@@ -13,18 +13,8 @@ import {
     Text,
 } from '@geti-ui/ui';
 
-export const MIN_BATCH_SIZE_EXPONENT = 0;
-export const MAX_BATCH_SIZE_EXPONENT = 8;
-
-// The slider moves in exponents so every stop is a power of two (1, 2, 4, ... 256),
-// which is what the trainer expects; the label maps back to the batch size itself.
-export const batchSizeToExponent = (batchSize: number): number => {
-    const exponent = Math.round(Math.log2(Math.max(batchSize, 1)));
-
-    return Math.min(Math.max(exponent, MIN_BATCH_SIZE_EXPONENT), MAX_BATCH_SIZE_EXPONENT);
-};
-
-export const exponentToBatchSize = (exponent: number): number => 2 ** exponent;
+// Keep the original stepped slider while offering useful intermediate batch sizes.
+export const BATCH_SIZE_OPTIONS = [1, 2, 4, 8, 16, 32, 64, 96, 112, 128, 160, 192, 224, 256] as const;
 
 export const RECOMMENDED_PRECISION: Record<string, string> = {
     cuda: 'bf16-mixed',
@@ -43,6 +33,9 @@ export const PRECISION_LABELS: Record<string, string> = {
 };
 
 interface TrainingParametersProps {
+    visionBackbone: Key;
+    onVisionBackboneChange: (value: Key | null) => void;
+    showVisionBackbone: boolean;
     maxEpochs: number;
     onMaxEpochsChange: (value: number) => void;
     batchSize: number;
@@ -81,6 +74,9 @@ interface TrainingParametersProps {
 }
 
 export const TrainingParameters = ({
+    visionBackbone,
+    onVisionBackboneChange,
+    showVisionBackbone,
     maxEpochs,
     onMaxEpochsChange,
     batchSize,
@@ -116,15 +112,27 @@ export const TrainingParameters = ({
     onSnapflowDistillEpochsChange,
 }: TrainingParametersProps) => (
     <Flex direction='column' gap='size-150' width='100%'>
+        {showVisionBackbone && (
+            <Picker label='Vision Backbone' selectedKey={visionBackbone} onSelectionChange={onVisionBackboneChange} width='100%'>
+                <Item key='resnet18'>ResNet18 (default)</Item>
+                <Item key='dinov2_small'>DINOv2-S/14 (frozen encoder)</Item>
+                <Item key='dinov2_base'>DINOv2-B/14 (frozen encoder)</Item>
+            </Picker>
+        )}
+        {showVisionBackbone && visionBackbone !== 'resnet18' && (
+            <Text UNSAFE_style={{ fontSize: '12px' }}>
+                DINOv2 uses 224×224 images. Pretrained weights download on the first run; B/14 may need a smaller batch size.
+            </Text>
+        )}
         <Flex direction='row' gap='size-150' width='100%'>
             <Flex direction='row' gap='size-300' width='100%'>
                 <Slider
                     label='Batch Size'
-                    value={batchSizeToExponent(batchSize)}
-                    onChange={(exponent) => onBatchSizeChange(exponentToBatchSize(exponent))}
-                    getValueLabel={(exponent) => `${exponentToBatchSize(exponent)}`}
-                    minValue={MIN_BATCH_SIZE_EXPONENT}
-                    maxValue={MAX_BATCH_SIZE_EXPONENT}
+                    value={Math.max(0, BATCH_SIZE_OPTIONS.indexOf(batchSize as (typeof BATCH_SIZE_OPTIONS)[number]))}
+                    onChange={(index) => onBatchSizeChange(BATCH_SIZE_OPTIONS[index])}
+                    getValueLabel={(index) => `${BATCH_SIZE_OPTIONS[index]}`}
+                    minValue={0}
+                    maxValue={BATCH_SIZE_OPTIONS.length - 1}
                     step={1}
                     flex
                     isFilled
@@ -134,9 +142,8 @@ export const TrainingParameters = ({
                             <Heading>Batch size</Heading>
                             <Content>
                                 <Text>
-                                    Number of samples processed in each training step. Larger batches use the device
-                                    more efficiently and give smoother gradient updates, but need more memory and a much
-                                    larger batch may need a higher learning rate to train as well.
+                                    Number of samples processed in each training step. Larger batches require more
+                                    GPU memory. The slider includes intermediate sizes such as 96 and 112.
                                 </Text>
                             </Content>
                         </ContextualHelp>
@@ -213,7 +220,11 @@ export const TrainingParameters = ({
                 <Item key='1'>1</Item>
                 <Item key='2'>2</Item>
                 <Item key='4'>4</Item>
+                <Item key='6'>6</Item>
                 <Item key='8'>8</Item>
+                <Item key='10'>10</Item>
+                <Item key='12'>12</Item>
+                <Item key='14'>14</Item>
                 <Item key='16'>16</Item>
             </Picker>
         </Flex>

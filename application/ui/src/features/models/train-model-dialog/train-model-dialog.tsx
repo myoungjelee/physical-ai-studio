@@ -127,6 +127,7 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
 
     const [currentStep, setCurrentStep] = useState<WizardStep>('setup');
     const [selectedPolicy, setSelectedPolicy] = useState<string>(baseModel?.policy ?? 'act');
+    const [visionBackbone, setVisionBackbone] = useState<Key>('resnet18');
     const [targetId, setTargetId] = useState<Key | null>(LOCAL_TARGET_ID);
     const remoteTrainerId =
         targetId === null || targetId === LOCAL_TARGET_ID ? undefined : targetRawId(String(targetId));
@@ -247,7 +248,7 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
 
     // Which formats the trained model is exported to; the policy decides what is
     // on offer.
-    const exportSelection = useExportBackends(selectedPolicy, remoteTrainerId);
+    const exportSelection = useExportBackends(selectedPolicy, remoteTrainerId, visionBackbone.toString());
 
     const trainMutation = $api.useMutation('post', '/api/jobs:train', {
         meta: {
@@ -377,6 +378,7 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
                 project_id: projectId,
                 model_name: name,
                 policy: selectedPolicy,
+                vision_backbone: selectedPolicy === 'act' && !baseModel ? visionBackbone.toString() as 'resnet18' | 'dinov2_small' | 'dinov2_base' : 'resnet18',
                 max_epochs: maxEpochs,
                 batch_size: batchSize,
                 num_workers: numWorkers === 'auto' ? ('auto' as const) : Number(numWorkers),
@@ -494,6 +496,9 @@ export const TrainModelDialog = ({ baseModel, close, defaultMaxEpochs = 5 }: Tra
 
                         {activeStep === 'training-parameters' && (
                             <TrainingParameters
+                                visionBackbone={visionBackbone}
+                                onVisionBackboneChange={(key) => setVisionBackbone(key ?? 'resnet18')}
+                                showVisionBackbone={selectedPolicy === 'act' && baseModel === undefined}
                                 maxEpochs={maxEpochs}
                                 onMaxEpochsChange={setMaxEpochs}
                                 batchSize={batchSize}
