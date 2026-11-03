@@ -14,6 +14,7 @@ import { useRobotForm } from '../../robot-form/provider';
 import { useRobotModels } from '../../robot-models-context';
 import { SchemaRobotInput } from '../../robot-types';
 import { InlineAlert } from '../shared/inline-alert';
+import type { CalibrationResult } from './use-setup-websocket';
 import { useSetupActions, useSetupState } from './wizard-provider';
 
 import classes from '../shared/setup-wizard.module.css';
@@ -65,11 +66,15 @@ const useSyncJointState = (jointState: Record<string, number> | null) => {
  * robot moves correctly. Shows "Save Robot" button that persists both the
  * robot and its calibration to the DB.
  */
-export const VerificationStep = () => {
+export const VerificationStep = ({
+    onBimanualComplete,
+}: {
+    onBimanualComplete?: (calibration: CalibrationResult['calibration']) => Promise<void>;
+}) => {
     const navigate = useNavigate();
     const { project_id } = useProjectId();
     const { goBack } = useSetupActions();
-    const { wsState } = useSetupState();
+    const { wsState, setupArm } = useSetupState();
     const { activeType, robotForm } = useRobotForm();
 
     const so101Payload: SchemaSo101RobotPayload | null =
@@ -102,7 +107,7 @@ export const VerificationStep = () => {
     const hasCalibration = wsState.calibrationResult !== null;
 
     const handleSave = async () => {
-        if (robotBody === null) {
+        if (robotBody === null && !onBimanualComplete) {
             return;
         }
 
@@ -110,11 +115,29 @@ export const VerificationStep = () => {
         setSaveError(null);
 
         try {
+            if (onBimanualComplete) {
+                if (
+                    !wsState.isConnected ||
+                    !wsState.calibrationResult ||
+                    Object.keys(wsState.calibrationResult.calibration).length === 0
+                ) {
+                    throw new Error('Verify the connected arm and its calibration before continuing.');
+                }
+                await onBimanualComplete(wsState.calibrationResult.calibration);
+                return;
+            }
+            if (!robotBody) return;
             // Embed calibration in payload if available
             if (wsState.calibrationResult) {
                 const calibrationPayload: Record<
                     string,
-                    { id: number; drive_mode: number; homing_offset: number; range_min: number; range_max: number }
+                    {
+                        id: number;
+                        drive_mode: number;
+                        homing_offset: number;
+                        range_min: number;
+                        range_max: number;
+                    }
                 > = {};
                 for (const [jointName, cal] of Object.entries(wsState.calibrationResult.calibration)) {
                     calibrationPayload[jointName] = {
@@ -161,12 +184,17 @@ export const VerificationStep = () => {
                         </Text>
                         <Text>
                             <strong>Type:</strong> {robotType}
+                            {setupArm ? ` (${setupArm} arm)` : ''}
                         </Text>
                         <Text>
-                            <strong>Serial:</strong> {serialNumber || 'Unavailable'}
+                            <strong>Serial:</strong>{' '}
+                            {setupArm
+                                ? String(robotForm.payload[`${setupArm}_serial_number`] ?? '')
+                                : serialNumber || 'Unavailable'}
                         </Text>
                         <Text>
-                            <strong>USB Port:</strong> {connectionString || 'Unavailable'}
+                            <strong>USB Port:</strong>{' '}
+                            {setupArm ? 'Connected by serial number' : connectionString || 'Unavailable'}
                         </Text>
                         <Text>
                             <strong>Calibration:</strong>{' '}
@@ -182,8 +210,20 @@ export const VerificationStep = () => {
                 <Button variant='secondary' onPress={goBack}>
                     Back
                 </Button>
-                <Button variant='accent' isPending={saving} isDisabled={robotBody === null} onPress={handleSave}>
-                    Save Robot
+                <Button
+                    variant='accent'
+                    isPending={saving}
+                    isDisabled={
+                        (!onBimanualComplete && robotBody === null) ||
+                        (Boolean(onBimanualComplete) && (!hasCalibration || !wsState.isConnected))
+                    }
+                    onPress={handleSave}
+                >
+                    {onBimanualComplete
+                        ? setupArm === 'left'
+                            ? 'Continue to right arm'
+                            : 'Save bimanual robot'
+                        : 'Save Robot'}
                 </Button>
             </Flex>
         </Flex>

@@ -69,6 +69,22 @@ async def test_local_metrics_snapshot_clears_issues_left_by_a_remote_stream(tmp_
         await stream.aclose()
 
 
+async def test_local_metrics_wait_for_file_before_streaming(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "metrics.csv"
+
+    async def create_metrics(_delay: float) -> None:
+        path.write_text("step,train/loss\n1,0.75\n")
+
+    monkeypatch.setattr("services.model_metrics_service.asyncio.sleep", create_metrics)
+    stream = ModelMetricsService.wait_for_local_metrics(path)
+    try:
+        snapshot = await anext(stream)
+        assert snapshot.event == "issues"
+        assert json.loads((await anext(stream)).data) == {"step": 1, "train_loss": 0.75}
+    finally:
+        await stream.aclose()
+
+
 @pytest.mark.parametrize("missing_code", [None, "NoSuchKey", "404"])
 async def test_batch_metrics_emit_authentication_and_resume_after_renewal(monkeypatch, missing_code) -> None:
     connection = AwsBatchConnection(

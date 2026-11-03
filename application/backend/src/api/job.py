@@ -128,6 +128,8 @@ async def get_model_job_metrics(
         return EventSourceResponse(
             model_metrics_service.tail_remote_csv_file(job.payload.remote_trainer_url, str(job.payload.remote_job_id))
         )
+    if isinstance(job, TrainJob) and job.status in {JobStatus.PENDING, JobStatus.RUNNING}:
+        return EventSourceResponse(model_metrics_service.wait_for_local_metrics(metrics_path))
     return EventSourceResponse(model_metrics_service.empty_metrics_stream())
 
 

@@ -107,7 +107,9 @@ const useJobMetrics = (jobId: string) => {
             initialValue: new Map<number, MetricsEntry>(),
         }),
         select: sortMetricsByStep,
-        staleTime: Infinity,
+        // An empty stream can finish before the trainer writes metrics.csv.
+        // Let a remounted metrics panel fetch the newly available rows.
+        staleTime: 0,
     });
     return { ...query, issues };
 };

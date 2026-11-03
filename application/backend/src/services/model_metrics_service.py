@@ -30,6 +30,18 @@ class ModelMetricsService:
         return self.settings.cache_dir / str(job.id) / "version_0" / "metrics.csv"
 
     @classmethod
+    async def wait_for_local_metrics(cls, path: Path) -> AsyncGenerator[ServerSentEvent]:
+        """Wait for the trainer to write its first CSV header before streaming rows.
+
+        The UI may subscribe before the training worker has started. Ending the
+        stream at that point would cache an empty metrics result for the job.
+        """
+        while not path.is_file() or path.stat().st_size == 0:
+            await asyncio.sleep(0.5)
+        async for event in cls.tail_csv_file(path):
+            yield event
+
+    @classmethod
     async def tail_csv_file(cls, path: Path) -> AsyncGenerator[ServerSentEvent]:
         """Async generator that live-tails a log file and yields SSE events."""
         try:

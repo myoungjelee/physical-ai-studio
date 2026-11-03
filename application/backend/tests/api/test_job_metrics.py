@@ -9,7 +9,8 @@ import pytest
 
 from api.job import get_model_job_metrics
 from exceptions import AwsFeatureDisabledError
-from schemas.job import RemoteTrainJobPayload, TrainJob
+from schemas.base_job import JobStatus
+from schemas.job import LocalTrainJobPayload, RemoteTrainJobPayload, TrainJob
 
 
 @pytest.mark.parametrize("url", ["https://trainer.test", "http://trainer.test", "aws-batch://us-east-1/jobs-bucket"])
@@ -62,3 +63,22 @@ async def test_batch_metrics_reject_exposure_before_starting_stream(tmp_path: Pa
     ):
         await get_model_job_metrics(job.id, jobs, metrics)
     metrics.tail_batch_csv_file.assert_not_called()
+
+
+async def test_local_running_job_waits_for_metrics_file(tmp_path: Path, monkeypatch) -> None:
+    job = TrainJob(
+        project_id=uuid4(),
+        status=JobStatus.RUNNING,
+        payload=LocalTrainJobPayload(project_id=uuid4(), dataset_id=uuid4(), policy="act", model_name="model"),
+    )
+    path = tmp_path / "not-yet-written.csv"
+    jobs = MagicMock(get_job_by_id=AsyncMock(return_value=job))
+    metrics = MagicMock(get_model_job_metrics_path=AsyncMock(return_value=path))
+    response = MagicMock()
+    monkeypatch.setattr("api.job.EventSourceResponse", response)
+
+    await get_model_job_metrics(job.id, jobs, metrics)
+
+    metrics.wait_for_local_metrics.assert_called_once_with(path)
+    metrics.empty_metrics_stream.assert_not_called()
+    response.assert_called_once_with(metrics.wait_for_local_metrics.return_value)

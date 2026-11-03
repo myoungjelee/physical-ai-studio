@@ -7,13 +7,19 @@ import { http } from '../../../../api/utils';
 import { server } from '../../../../msw-node-setup';
 import { render } from '../../../../test-utils/render';
 import { RobotFormProvider, useRobotForm } from '../provider';
-import { BimanualSO101FormFields } from './bimanual-so101';
+import { BimanualSO101FormFields, hasBimanualCalibrations, hasDirectBimanualPorts } from './bimanual-so101';
 
 const PROJECT_ID = 'test-project-id';
 const ROBOTS_PATH = '/api/projects/{project_id}/robots';
 
 const calibration = {
-    shoulder_pan: { id: 1, drive_mode: 0, homing_offset: 0, range_min: 0, range_max: 4095 },
+    shoulder_pan: {
+        id: 1,
+        drive_mode: 0,
+        homing_offset: 0,
+        range_min: 0,
+        range_max: 4095,
+    },
 };
 
 const so101Robot = <T extends 'SO101_Follower' | 'SO101_Leader'>(
@@ -51,12 +57,73 @@ const renderFields = (activeType: string, payload: Record<string, unknown> = {})
     );
 
 const selectArm = async (user: ReturnType<typeof userEvent.setup>, arm: 'left' | 'right', name: string) => {
-    await user.click(await screen.findByRole('button', { name: new RegExp(`Select ${arm} arm`) }));
+    await user.click(
+        await screen.findByRole('button', {
+            name: new RegExp(`Select ${arm} arm`),
+        })
+    );
     await user.click(await screen.findByRole('option', { name }));
     await user.keyboard('{Escape}');
 };
 
 describe('BimanualSO101FormFields', () => {
+    it('requires two different serials and both calibrations for a direct save', () => {
+        expect(
+            hasDirectBimanualPorts({
+                left_serial_number: 'A',
+                right_serial_number: 'B',
+            })
+        ).toBe(true);
+        expect(
+            hasDirectBimanualPorts({
+                left_serial_number: 'A',
+                right_serial_number: 'A',
+            })
+        ).toBe(false);
+        expect(hasDirectBimanualPorts({ left_serial_number: 'A' })).toBe(false);
+        expect(
+            hasBimanualCalibrations({
+                left_calibration: calibration,
+                right_calibration: calibration,
+            })
+        ).toBe(true);
+        expect(
+            hasBimanualCalibrations({
+                left_calibration: calibration,
+                right_calibration: null,
+            })
+        ).toBe(false);
+    });
+
+    it('selects two distinct directly connected controllers without registering single arms', async () => {
+        server.use(
+            http.get(ROBOTS_PATH, () => HttpResponse.json([])),
+            http.get('/api/robots/catalog/{robot_type}/discover', () =>
+                HttpResponse.json([
+                    { connection_string: '/dev/ttyACM0', serial_number: 'SERIAL-L' },
+                    { connection_string: '/dev/ttyACM1', serial_number: 'SERIAL-R' },
+                ])
+            )
+        );
+        const user = userEvent.setup();
+        renderFields('BimanualSO101_Follower');
+
+        await user.click(await screen.findByRole('button', { name: /Setup method/ }));
+        await user.click(await screen.findByRole('option', { name: /Set up both arms directly/ }));
+        await user.click(await screen.findByRole('button', { name: /Left arm USB controller/ }));
+        await user.click(await screen.findByRole('option', { name: /SERIAL-L/ }));
+        await user.click(await screen.findByRole('button', { name: /Right arm USB controller/ }));
+        await user.click(await screen.findByRole('option', { name: /SERIAL-R/ }));
+
+        const payload = JSON.parse(screen.getByRole('status').textContent ?? '{}');
+        expect(payload).toMatchObject({
+            left_serial_number: 'SERIAL-L',
+            right_serial_number: 'SERIAL-R',
+            role: 'follower',
+        });
+        expect(payload.left_calibration).toBeNull();
+        expect(payload.right_calibration).toBeNull();
+    });
     it('renders a picker for both arms', async () => {
         server.use(
             http.get(ROBOTS_PATH, () =>
@@ -114,7 +181,11 @@ describe('BimanualSO101FormFields', () => {
         await selectArm(user, 'left', 'Follower Arm A');
 
         expect(screen.getByRole('status')).toHaveTextContent(
-            JSON.stringify({ left_serial_number: 'SO101-A', left_calibration: calibration, role: 'follower' })
+            JSON.stringify({
+                left_serial_number: 'SO101-A',
+                left_calibration: calibration,
+                role: 'follower',
+            })
         );
     });
 
@@ -133,7 +204,11 @@ describe('BimanualSO101FormFields', () => {
         await selectArm(user, 'right', 'Leader Arm B');
 
         expect(screen.getByRole('status')).toHaveTextContent(
-            JSON.stringify({ right_serial_number: 'SO101-B', right_calibration: calibration, role: 'leader' })
+            JSON.stringify({
+                right_serial_number: 'SO101-B',
+                right_calibration: calibration,
+                role: 'leader',
+            })
         );
     });
 

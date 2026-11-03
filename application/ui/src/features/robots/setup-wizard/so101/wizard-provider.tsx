@@ -50,6 +50,8 @@ interface SetupState {
     // Domain state
     calibrationPhase: CalibrationPhase;
     preVerifyProbeResult: MotorProbeResult | null;
+    setupArm: 'left' | 'right' | null;
+    setupRobotType: 'SO101_Follower' | 'SO101_Leader' | null;
 }
 
 interface SetupActions {
@@ -78,7 +80,13 @@ const SetupActionsContext = createContext<SetupActions | null>(null);
 // Provider
 // ---------------------------------------------------------------------------
 
-export const SetupWizardProvider = ({ children }: { children: ReactNode }) => {
+export const SetupWizardProvider = ({
+    children,
+    setupArm = null,
+}: {
+    children: ReactNode;
+    setupArm?: 'left' | 'right' | null;
+}) => {
     const { project_id: projectId } = useProjectId();
     const { activeType, robotForm } = useRobotForm();
 
@@ -163,8 +171,19 @@ export const SetupWizardProvider = ({ children }: { children: ReactNode }) => {
         activeType === 'SO101_Follower' || activeType === 'SO101_Leader'
             ? (robotForm.payload as SchemaSo101RobotPayload)
             : null;
-    const serialNumber = so101Payload?.serial_number ?? '';
-    const robotType = activeType;
+    const bimanualPayload = robotForm.payload as Record<string, unknown>;
+    const bimanualType = activeType === 'BimanualSO101_Follower' || activeType === 'BimanualSO101_Leader';
+    const serialNumber =
+        bimanualType && setupArm
+            ? String(bimanualPayload[`${setupArm}_serial_number`] ?? '')
+            : (so101Payload?.serial_number ?? '');
+    // The backend already supports per-arm setup. Open one SO101 socket per arm,
+    // not a bimanual socket, so calibration cannot accidentally mix both buses.
+    const robotType = bimanualType
+        ? activeType === 'BimanualSO101_Leader'
+            ? 'SO101_Leader'
+            : 'SO101_Follower'
+        : activeType;
     const connectionString = so101Payload?.connection_string ?? '';
 
     const wsEnabled = (!!serialNumber || !!connectionString) && robotType?.startsWith('SO101') === true;
@@ -207,6 +226,8 @@ export const SetupWizardProvider = ({ children }: { children: ReactNode }) => {
         wsState,
         calibrationPhase,
         preVerifyProbeResult,
+        setupArm,
+        setupRobotType: robotType === 'SO101_Follower' || robotType === 'SO101_Leader' ? robotType : null,
     };
 
     const actions: SetupActions = useMemo(

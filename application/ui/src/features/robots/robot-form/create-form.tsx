@@ -9,6 +9,7 @@ import type { SchemaSo101RobotPayload } from '../../../api/openapi-spec';
 import { useProjectId } from '../../../features/projects/use-project';
 import { paths } from '../../../paths';
 import { useRobotCatalogQuery } from '../robot-catalog.hooks';
+import { hasBimanualCalibrations, hasDirectBimanualPorts } from './catalog/bimanual-so101';
 import { FormFields, RobotFormHeading, RobotType } from './form';
 import { useRobotForm, useRobotFormBody } from './provider';
 
@@ -38,6 +39,10 @@ export const CreateRobotForm = () => {
     const body = useRobotFormBody(uuidv4());
     const isSO101 = activeType === 'SO101_Follower' || activeType === 'SO101_Leader';
     const shouldRunSO101Setup = isSO101 && !hasUploadedCalibration(body?.payload);
+    const isBimanualSO101 = activeType === 'BimanualSO101_Follower' || activeType === 'BimanualSO101_Leader';
+    const bimanualPayload = (body?.payload ?? {}) as Record<string, unknown>;
+    const validBimanualPorts = hasDirectBimanualPorts(bimanualPayload);
+    const shouldRunBimanualSetup = isBimanualSO101 && validBimanualPorts && !hasBimanualCalibrations(bimanualPayload);
     const shouldRunZeroCalibration = catalog.some(
         ({ type, zero_calibration }) => type === activeType && zero_calibration != null
     );
@@ -55,7 +60,7 @@ export const CreateRobotForm = () => {
             return;
         }
 
-        if (shouldRunSO101Setup) {
+        if (shouldRunSO101Setup || shouldRunBimanualSetup) {
             navigate(paths.project.robots.so101Setup({ project_id }));
             return;
         }
@@ -73,7 +78,7 @@ export const CreateRobotForm = () => {
         navigate(paths.project.robots.show({ project_id, robot_id: createdRobot.id }));
     };
 
-    const isCreateDisabled = body === null;
+    const isCreateDisabled = body === null || (isBimanualSO101 && !validBimanualPorts);
 
     return (
         <Flex direction='column' gap='size-200'>
@@ -93,7 +98,7 @@ export const CreateRobotForm = () => {
                             isDisabled={isCreateDisabled}
                             isPending={addRobotMutation.isPending}
                         >
-                            {shouldRunSO101Setup
+                            {shouldRunSO101Setup || shouldRunBimanualSetup
                                 ? 'Begin Setup'
                                 : shouldRunZeroCalibration
                                   ? 'Begin Calibration'

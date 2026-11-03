@@ -11,6 +11,7 @@ import { CalibrationStep } from './calibration-step';
 import { DiagnosticsStep } from './diagnostics-step';
 import { MotorSetupStep } from './motor-setup-step';
 import { useCenteringAnimation, useRangeOfMotionAnimation } from './use-calibration-animations';
+import type { CalibrationResult } from './use-setup-websocket';
 // Lazy import to avoid circular dependency (VerificationStep imports from wizard-provider)
 import { VerificationStep } from './verification-step';
 import { STEP_LABELS, useSetupActions, useSetupState, WizardStep } from './wizard-provider';
@@ -59,7 +60,10 @@ function useHighlights(): JointHighlight[] {
                 }));
             }
             // Reassembly idle/verifying: highlight all motors in accent
-            return MOTOR_SETUP_ORDER.map((j) => ({ joint: j, color: 'accent' as const }));
+            return MOTOR_SETUP_ORDER.map((j) => ({
+                joint: j,
+                color: 'accent' as const,
+            }));
         }
 
         const currentMotor = MOTOR_SETUP_ORDER[currentMotorIndex];
@@ -85,10 +89,10 @@ function useHighlights(): JointHighlight[] {
  */
 const ViewerPanel = () => {
     const { activeType } = useRobotForm();
-    const { currentStep, calibrationPhase } = useSetupState();
+    const { currentStep, calibrationPhase, setupRobotType } = useSetupState();
     const highlights = useHighlights();
 
-    const robotType = activeType as SchemaRobotType | null;
+    const robotType = (setupRobotType ?? activeType) as SchemaRobotType | null;
 
     const isCentering =
         currentStep === WizardStep.CALIBRATION &&
@@ -151,7 +155,11 @@ const ViewerPanel = () => {
  * All setup state is provided by the SetupWizardProvider context —
  * this component simply renders the layout and switches between steps.
  */
-export const SetupWizardContent = () => {
+export const SetupWizardContent = ({
+    onBimanualComplete,
+}: {
+    onBimanualComplete?: (calibration: CalibrationResult['calibration']) => Promise<void>;
+}) => {
     const { currentStep, completedSteps } = useSetupState();
     const { visibleSteps, goToStep } = useSetupActions();
 
@@ -191,7 +199,9 @@ export const SetupWizardContent = () => {
 
                 {currentStep === WizardStep.CALIBRATION && <CalibrationStep />}
 
-                {currentStep === WizardStep.VERIFICATION && <VerificationStep />}
+                {currentStep === WizardStep.VERIFICATION && (
+                    <VerificationStep onBimanualComplete={onBimanualComplete} />
+                )}
             </View>
 
             {/* Right column: 3D robot viewer */}

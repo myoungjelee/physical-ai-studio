@@ -25,13 +25,16 @@ Open <http://localhost:7861>. `scripts/bimanual-test.sh down` stops the test sta
 
 ## Registration and recording
 
-1. Register and calibrate two individual SO-101 Leaders and two individual SO-101 Followers. Each needs a distinct USB identity/serial number.
-2. In the robot catalog, create `BimanualSO101_Leader` by selecting the two registered leaders, left and right.
-3. Create `BimanualSO101_Follower` by selecting the two calibrated followers, left and right.
-4. Create an Environment containing **one logical Bimanual Follower** and selecting the logical Bimanual Leader as teleoperator, plus the cameras. Do **not** add two individual follower rows.
-5. Begin with unobstructed arm travel, low speed and readily available power cutoff. Verify left/right leader-to-follower movement before recording.
-6. Record one short, low-risk test episode, and export it in LeRobot v3 format. Verify that both arm positions and actions, as well as every expected camera, are represented in one episode.
-7. Check dimensions, left/right prefixes, missing values, timestamps/relative synchronization, and camera feature names before any model training.
+1. Choose `BimanualSO101_Leader` or `BimanualSO101_Follower` in the robot catalog. Choose one of two registration methods:
+   - **Use two registered, calibrated arms (existing method):** register and calibrate the two individual SO-101 arms first, then select the left and right arms.
+   - **Set up both arms directly (new method; source only, not yet deployed):** select distinct left and right USB controllers identified by serial number. Run the existing SO-101 diagnostics, motor setup (if needed), calibration and verification on **left first**, then **right**. Only after verifying both sides does the wizard save **one** logical bimanual robot. No individual arm records are created.
+2. Repeat for the other role if the setup includes both a bimanual leader and bimanual follower. Use the correct power supplies and verify the type before motor setup.
+3. Create an Environment containing **one logical Bimanual Follower** and selecting the logical Bimanual Leader as teleoperator, plus the cameras. Do **not** add two individual follower rows.
+4. Begin with unobstructed arm travel, low speed and readily available power cutoff. Verify left/right leader-to-follower movement before recording.
+5. Record one short, low-risk test episode, and export it in LeRobot v3 format. Verify that both arm positions and actions, as well as every expected camera, are represented in one episode.
+6. Check dimensions, left/right prefixes, missing values, timestamps/relative synchronization, and camera feature names before any model training.
+
+**Direct method restrictions:** The controllers must have unique discoverable serial numbers. The wizard reuses the single-arm setup WebSocket per side, and a newly registered bimanual robot is not saved unless both side-specific calibrations are available. Reconfiguring motors/calibration changes real hardware, so test with hardware idle. The direct flow has passed TypeScript and UI unit tests but **has not been tested on physical two-arm hardware**.
 
 ## What is implemented vs unknown
 
