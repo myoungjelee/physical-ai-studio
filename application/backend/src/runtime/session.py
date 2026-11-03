@@ -29,6 +29,7 @@ from runtime.contract import (
     StateEvent,
 )
 from runtime.dataset_features import build_lerobot_dataset_features
+from runtime.diagnostics import DiagnosticsTickCallback
 from settings import get_settings
 
 if TYPE_CHECKING:
@@ -139,7 +140,11 @@ class RuntimeSession:
             action_source=self._action_source,
             cameras=self._cameras,
             fps=float(self._document["init_args"]["fps"]),
-            callbacks=[self._stream_callback, self._recording_callback],
+            callbacks=[
+                self._stream_callback,
+                self._recording_callback,
+                DiagnosticsTickCallback(self._action_source.diagnostics, lambda: self._action_source.follower_source),
+            ],
         )
         if self._disconnect_requested:
             self._runtime.stop()

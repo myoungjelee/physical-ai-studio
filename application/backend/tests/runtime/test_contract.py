@@ -80,3 +80,23 @@ def test_commands_round_trip_through_json() -> None:
     restored = CommandAdapter.validate_python(command.model_dump(mode="json"))
 
     assert restored == command
+
+
+def test_replan_interval_is_a_validated_runtime_command() -> None:
+    from runtime.contract import SetReplanIntervalCommand
+
+    cmd = CommandAdapter.validate_python({"command": "set_replan_interval", "replan_interval": 20})
+    assert isinstance(cmd, SetReplanIntervalCommand)
+    assert cmd.replan_interval == 20
+    for invalid in (0, -1, 1025):
+        with pytest.raises(ValidationError):
+            CommandAdapter.validate_python({"command": "set_replan_interval", "replan_interval": invalid})
+
+
+def test_diagnostics_commands_are_valid() -> None:
+    from runtime.contract import StartInferenceDiagnosticsCommand, StopInferenceDiagnosticsCommand
+
+    start = CommandAdapter.validate_python({"command": "start_inference_diagnostics"})
+    stop = CommandAdapter.validate_python({"command": "stop_inference_diagnostics"})
+    assert isinstance(start, StartInferenceDiagnosticsCommand)
+    assert isinstance(stop, StopInferenceDiagnosticsCommand)

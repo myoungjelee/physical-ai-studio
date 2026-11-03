@@ -47,6 +47,19 @@ class LoadModelCommand(CommandBase):
     force: bool = False
 
 
+class SetReplanIntervalCommand(CommandBase):
+    command: Literal["set_replan_interval"] = "set_replan_interval"
+    replan_interval: int = Field(ge=1, le=1024)
+
+
+class StartInferenceDiagnosticsCommand(CommandBase):
+    command: Literal["start_inference_diagnostics"] = "start_inference_diagnostics"
+
+
+class StopInferenceDiagnosticsCommand(CommandBase):
+    command: Literal["stop_inference_diagnostics"] = "stop_inference_diagnostics"
+
+
 class LoadDatasetCommand(CommandBase):
     command: Literal["load_dataset"] = "load_dataset"
     # ``datasets_dir / <dataset_id>`` is already the only definition of a
@@ -82,6 +95,9 @@ Command = Annotated[
     SetFollowerSourceCommand
     | DisconnectCommand
     | LoadModelCommand
+    | SetReplanIntervalCommand
+    | StartInferenceDiagnosticsCommand
+    | StopInferenceDiagnosticsCommand
     | LoadDatasetCommand
     | StartTaskCommand
     | StopTaskCommand
@@ -105,6 +121,9 @@ class StateData(BaseModel):
     follower_source: FollowerSource
     has_leader: bool = False
     model_loaded: bool | None = None
+    replan_interval: int | None = None
+    diagnostics_recording: bool = False
+    diagnostics_id: UUID | None = None
     task: str | None = None
     dataset_loaded: bool | None = None
     is_recording: bool | None = None

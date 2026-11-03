@@ -2,7 +2,7 @@
 
 > 이 문서는 회사에서 직접 수정한 Physical AI Studio 포크의 **추가 기능과 설치·업데이트 방법**입니다. 공식 프로젝트의 일반 설치 문서와 다릅니다.
 >
-> 기준: 2026-11-02 / 베이스 커밋 `bc5e91f030da0bd7eef27d4f9c67e6aa713857c3` + 로컬 수정(미커밋) / Ubuntu x86_64 (amd64)
+> 기준: 2026-11-03 / 베이스 커밋 `bc5e91f030da0bd7eef27d4f9c67e6aa713857c3` + 로컬 DINOv2 ACT 커스텀 변경 포함 / Ubuntu x86_64 (amd64)
 
 ## 빠른 시작
 
@@ -39,7 +39,27 @@ bash install-gpu.sh
 
 **예시 작업 흐름:** RTX 4090 GPU PC에서 양팔 ACT 학습 및 PyTorch/OpenVINO Export → 전체 모델 ZIP 다운로드 → Panther Lake PC의 SO-101 프로젝트에서 Import → 로컬 호환 데이터셋 연결 → 추론 환경 및 백엔드 검사 → 실기체 테스트. *OpenVINO 모델이 있다고 Intel GPU/NPU 추론이 자동 지원되는 것은 아닙니다.*
 
-### 2. USB용 CPU/GPU 설치 스크립트
+### 2. ACT 학습·추론 UI 추가 기능 (2026-11-03)
+
+- **Train Model → Batch Size:** 기존 슬라이더를 유지하면서 `1, 2, 4, 8, 16, 32, 64, 96, 112, 128, 160, 192, 224, 256` 선택 가능. Auto도 유지합니다.
+- **Train Model → Data Workers:** 기존 드롭다운을 유지하면서 `Auto, 0, 1, 2, 4, 6, 8, 10, 12, 14, 16` 선택 가능.
+- **Batch Auto**는 실제 짧은 학습을 통해 실행 가능한 Batch Size를 탐색하며, **Workers Auto**는 CPU 논리 코어 수와 8 중 작은 값을 사용합니다.
+- **Inference → ACT Replan Interval:** 실행 간격 변경 및 현재 적용값 확인, 기본 100프레임.
+- **Inference → Diagnostics:** 추론 중 로봇 상태·전송 Action을 CSV로 기록·다운로드. 기록은 `/app/storage/diagnostics/`에 저장되며 원본 모델의 예측 Action Chunk 전체를 저장하는 기능은 아닙니다.
+- Batch Size 128은 회사 RTX 4090 환경에서 Auto 탐색 중 메모리 부족으로 실패했으며, 배치 112에서는 실제 학습이 진행되는 것을 확인했습니다. 큰 값의 선택 가능 여부는 **학습 완료·성능·안정성을 보장하지 않습니다**.
+
+### 3. ACT Vision Backbone 선택 — ResNet18 / DINOv2 (2026-11-03)
+
+- 새 ACT 모델 학습 시 **Models → Train model → Training Parameters → Vision Backbone**에서 `ResNet18 (default)`, `DINOv2-S/14 (frozen encoder)`, `DINOv2-B/14 (frozen encoder)`를 선택합니다. 이미 학습한 모델의 **재학습(Resume)**에서는 백본을 다시 선택하지 않고 체크포인트에 저장된 구조를 사용합니다.
+- **Frozen encoder**: DINOv2 사전학습 가중치는 고정하고, 패치 특징을 ACT의 `dim_model`(기본 512)으로 투영하는 어댑터와 ACT 정책을 학습합니다. DINOv2-S/14는 384차원, B/14는 768차원 패치 특징을 사용합니다.
+- DINO 학습 시 카메라 입력은 224×224로 전처리됩니다. 기존 데이터셋은 재수집하지 않고 사용할 수 있지만, 카메라/로봇 관절 구조가 해당 데이터셋과 일치해야 합니다. 기존 ResNet18 체크포인트에서 DINO로 백본을 바꿔 이어서 학습할 수는 없습니다.
+- DINOv2 최초 **새 모델 학습 시** 공개 Hugging Face 모델(`facebook/dinov2-small`, `facebook/dinov2-base`) 사전학습 가중치를 다운로드하므로 네트워크 접근이 필요합니다. 다운로드된 가중치는 기본적으로 `/app/storage/model-cache/dinov2`에 캐시하여 **기존 named volume**과 함께 유지합니다. 별도로 `PAI_DINOV2_CACHE_DIR` 환경 변수로 경로를 지정할 수 있습니다.
+- 학습한 체크포인트와 PyTorch Export(`exports/torch`)에는 DINO 백본 가중치가 포함되며, **추론 시에는 해당 체크포인트와 저장된 설정으로 자동 복원**합니다. 추론 화면에서 비전 백본을 다시 고르지 않습니다.
+- **DINO 기반 ACT의 검증된 내보내기는 PyTorch(`torch`)만 지원**합니다. 이 빌드에서 DINO의 ONNX·OpenVINO·ExecuTorch Export는 검증하지 않아 선택을 제한했습니다. 기존 ResNet18은 기존 내보내기 선택지를 유지합니다. 따라서 **Intel CPU 전용 PC에서 DINO 모델을 사용할 때도 PyTorch 추론 경로를 사용**하며, OpenVINO/NPU 가속이 되는 것으로 간주하지 마세요.
+- 회사 RTX 4090 PC에서 DINOv2-S/B **특징 추출·투영**, DINOv2-S **추론·체크포인트 저장/복원·PyTorch Export 재로딩**, Train UI 테스트 43개와 새 이미지 서버 기동/API 확인을 수행했습니다. **실제 데이터셋으로 전체 학습 완료, 물체 파지 성공률, Intel CPU 로봇 PC 추론은 아직 검증하지 않았습니다.**
+- DINOv2-B는 S보다 큰 모델이므로 학습 시 GPU 메모리 사용량과 처리량을 확인하세요. 첫 실험은 DINOv2-S와 작은 Batch Size(예: 4)를 권장합니다. 그림자 오인식 개선은 검증 대상이지 보장된 결과가 아닙니다.
+
+### 4. USB용 CPU/GPU 설치 스크립트
 
 | 파일 | 역할 |
 | --- | --- |
@@ -52,9 +72,9 @@ bash install-gpu.sh
 
 설치 스크립트는 필요한 도구 확인 → Docker 접근(필요 시 `sudo` 인증) → 이미지 ID 확인/결합/검증/`docker load` → 저장 볼륨 결정 → 호스트 장치 그룹/USB/카메라 연결 → 기존 컨테이너 재생성 확인 → GPU 장치 검증(GPU 스크립트만) → HTTP API/카메라 검색 확인 순서로 실행됩니다. 실제 GPU 스크립트에서는 GPU 접근 검사가 기존 컨테이너 확인보다 먼저 수행됩니다.
 
-### 3. 새 이미지로 업데이트하면서 기존 데이터 보존
+### 5. 새 이미지로 업데이트하면서 기존 데이터 보존
 
-- Docker 이미지의 **이름/태그는 고정**: `physical-ai-studio-bimanual:latest` (CPU/GPU 공통 동일 이미지).
+- 설치 후 Docker 이미지의 **이름/태그는 고정**: `physical-ai-studio-bimanual:latest` (CPU/GPU 공통 동일 이미지). 배포 아카이브 내부의 원본 태그는 `physical-ai-studio-bimanual:dinov2-act-20261103`이며, 설치 스크립트가 `IMAGE-ID`의 정확한 이미지를 `latest`로 태그합니다.
 - **`latest` 자체가 볼륨을 지정하거나 업데이트하지는 않습니다.** 스크립트의 `/app/storage` 마운트가 프로젝트/데이터셋/모델/SQLite DB 저장소를 결정합니다.
 - 기존 **운영 컨테이너 `physical-ai-studio-bimanual`**가 있으면 그 컨테이너에 연결된 **named volume**을 최우선으로 재사용합니다.
 - 운영 컨테이너가 없는 경우에만 레거시 `physical-ai-studio-bimanual-test`의 named volume을 탐색합니다. 이 테스트 컨테이너가 아직 실행 중이면 중지 전 별도의 `y/N` 확인을 받으며, 컨테이너 자체는 삭제하지 않습니다.
@@ -67,7 +87,7 @@ bash install-gpu.sh
 
 ```text
 physical-ai-studio-bimanual (운영 컨테이너)
-  └── /app/storage ← pai-act-merged-storage (기존 프로젝트·모델 보존)
+  └── /app/storage ← pai-storage (기존 프로젝트·모델 보존)
 ```
 
 **로봇 PC**에는 기존 named volume `physical-ai-studio-bimanual-storage`와 수집 데이터 15 에피소드/8,557 프레임이 있으므로 절대 삭제하지 마세요. 배포 ZIP/이미지에는 이 데이터가 담겨 있지 않습니다.
@@ -109,14 +129,15 @@ sha256sum -c PARTS-SHA256SUMS
 
 - Docker 접근 권한이 없다면 `docker` 대신 `sudo docker`로 확인하세요. 스크립트는 필요한 경우 인증을 요청합니다.
 - **UI가 옛날 화면이라면** 실제 이미지 ID·컨테이너 상태·7860 포트 점유를 먼저 확인하세요. `physical-ai-studio-bimanual-test`가 남아 7860을 사용하는 경우가 있었습니다. 브라우저 캐시라고 먼저 단정하지 마세요.
+- **Vision Backbone 선택창이 보이지 않으면** `Models → Train model → Training Parameters` 화면인지, 실제 실행 이미지가 `IMAGE-ID`의 이미지인지 확인하고 브라우저를 강력 새로고침(`Ctrl+Shift+R`)하세요.
 - **프로젝트가 사라져 보이면** 새 컨테이너의 `/app/storage` 볼륨 이름을 기존 컨테이너/백업 볼륨과 비교하세요. 다른 볼륨 연결이 원인이었으며 실제 파일을 삭제한 것이 아니었습니다. 데이터를 복사하거나 볼륨을 제거하기 전 확인해야 합니다.
 - **Docker 이미지와 USB의 분할 파일만으로 데이터셋이 복구되는 것은 아닙니다.** 백업은 Docker named volume/DB 기준으로 별도 수행해야 합니다.
 - 컨테이너가 실행 중이어도 `GET /api/health` 응답이 다른 컨테이너에서 온 것이 아닌지 확인해야 합니다. 동일한 호스트 7860 포트를 두 서버가 동시에 사용할 수 없습니다.
 
 ## 현재 검증 범위 및 제약
 
-- 회사 RTX 4090 PC: 새 ZIP Import API 등록 확인, 웹 UI 빌드 성공, 유효/손상 ZIP 스모크 테스트 성공. 실제 대용량 ZIP의 브라우저 업로드 및 실기체 추론은 별도 검증이 필요합니다.
-- 새 가로 버튼 배치 및 문구 변경 이미지: **빌드 성공, 분할 압축 4개 체크섬 검증 완료**. 실행 중인 기존 컨테이너는 별도 승인 없이 교체하지 않았으므로 UI 반영은 새 설치 후 확인해야 합니다.
+- 회사 RTX 4090 PC: ZIP Import API 등록 및 UI 빌드 확인. ACT 추론 옵션·진단 CSV·학습 슬라이더/드롭다운·DINO 선택 기능을 포함한 Docker 이미지가 실행되어 API 응답 HTTP 200을 확인했습니다. CPU 로봇 PC에서의 동일 이미지 실행 및 실기체 검증은 별도입니다.
+- 이번 배포 이미지 ID는 `IMAGE-ID` 기준입니다. DINOv2 ACT 적용 이미지의 분할 압축과 체크섬을 생성·검증했습니다. 회사 운영 컨테이너는 DINO 이미지로 교체하여 HTTP 200과 백본 선택 API를 확인했습니다.
 - 양팔 SO-101 로봇 PC: 기존 수동 ACT Import 성공 보고, 15 에피소드/8,557 프레임 수집 확인. 이 최신 빌드의 CPU 설치와 실제 모델 ZIP 업로드/추론은 미검증입니다.
 - 기능은 업로드/등록 자동화를 제공하나, 업로드 퍼센트 표시와 취소 기능은 아직 없습니다.
 - 실제 데이터셋과 모델은 이미지에 내장되지 않습니다. 모델의 로봇 적합성·좌표계·입출력 스펙 검증 및 수동 캘리브레이션은 별도 책임입니다.

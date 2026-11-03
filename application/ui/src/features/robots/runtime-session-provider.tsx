@@ -21,6 +21,9 @@ export interface RuntimeSessionState {
     follower_source: FollowerSource;
     has_leader: boolean;
     model_loaded: boolean;
+    replan_interval: number | null;
+    diagnostics_recording: boolean;
+    diagnostics_id: string | null;
     task: string | null;
     dataset_loaded: boolean;
     is_recording: boolean;
@@ -32,6 +35,9 @@ const createRuntimeSessionState = (): RuntimeSessionState => ({
     follower_source: 'hold',
     has_leader: false,
     model_loaded: false,
+    replan_interval: null,
+    diagnostics_recording: false,
+    diagnostics_id: null,
     task: null,
     dataset_loaded: false,
     is_recording: false,
@@ -66,6 +72,9 @@ type RuntimeSessionContextValue = {
     inferenceDevice: InferenceDevice | undefined;
     state: RuntimeSessionState;
     loadModel: MutationResult<{ model: SchemaModel; inference_device: InferenceDevice }>;
+    setReplanInterval: MutationResult<number>;
+    startDiagnostics: MutationResult;
+    stopDiagnostics: MutationResult;
     loadDataset: MutationResult<SchemaDatasetOutput>;
     startTask: MutationResult<string>;
     stopTask: MutationResult;
@@ -178,6 +187,9 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
                     follower_source: next.follower_source ?? 'hold',
                     has_leader: next.has_leader ?? false,
                     model_loaded: next.model_loaded ?? false,
+                    replan_interval: next.replan_interval ?? null,
+                    diagnostics_recording: next.diagnostics_recording ?? false,
+                    diagnostics_id: next.diagnostics_id ?? null,
                     task: next.task ?? null,
                     dataset_loaded: next.dataset_loaded ?? false,
                     is_recording: next.is_recording ?? false,
@@ -213,6 +225,30 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
             setInferenceDevice(properties.inference_device);
             return result;
         },
+    });
+
+    const setReplanInterval = useMutation({
+        meta: { skipInvalidation: true },
+        mutationFn: async (replan_interval: number) =>
+            socket.sendJsonMessageAndWait<RuntimeApiJsonResponse>(
+                { event: 'set_replan_interval', data: { replan_interval } },
+                ({ event, data }) => event === 'state' && data?.replan_interval === replan_interval
+            ),
+    });
+
+    const startDiagnostics = useMutation({
+        meta: { skipInvalidation: true },
+        mutationFn: async () => socket.sendJsonMessageAndWait<RuntimeApiJsonResponse>(
+            { event: 'start_inference_diagnostics', data: {} },
+            ({ event, data }) => event === 'state' && data?.diagnostics_recording === true
+        ),
+    });
+    const stopDiagnostics = useMutation({
+        meta: { skipInvalidation: true },
+        mutationFn: async () => socket.sendJsonMessageAndWait<RuntimeApiJsonResponse>(
+            { event: 'stop_inference_diagnostics', data: {} },
+            ({ event, data }) => event === 'state' && data?.diagnostics_recording === false
+        ),
     });
 
     const loadDataset = useMutation({
@@ -295,6 +331,9 @@ export const RuntimeSessionProvider = (props: RuntimeSessionProviderProps) => {
                 inferenceDevice,
                 state,
                 loadModel,
+                setReplanInterval,
+                startDiagnostics,
+                stopDiagnostics,
                 loadDataset,
                 startTask,
                 stopTask,

@@ -3,13 +3,13 @@ import { useState } from 'react';
 import {
     AlertDialog,
     Button,
-    ButtonGroup,
     ComboBox,
     DialogContainer,
     Flex,
     Heading,
     Item,
     Link,
+    NumberField,
     ProgressCircle,
     StatusLight,
     Switch,
@@ -34,6 +34,7 @@ export const InferenceViewer = ({ tasks }: InferenceViewerProps) => {
     // The prompt is free text; the dataset's tasks are offered as suggestions. Custom values must
     // stay allowed: otherwise the combo box discards typed text when it loses focus.
     const [task, setTask] = useState<string>(tasks[0] ?? '');
+    const [replanInterval, setReplanIntervalInput] = useState<number>(100);
     const [isEmptyPromptDialogOpen, setIsEmptyPromptDialogOpen] = useState(false);
 
     const {
@@ -42,6 +43,9 @@ export const InferenceViewer = ({ tasks }: InferenceViewerProps) => {
         state,
         startTask,
         stopTask,
+        setReplanInterval,
+        startDiagnostics,
+        stopDiagnostics,
         setFollowerSource,
         environment,
         observation,
@@ -83,39 +87,35 @@ export const InferenceViewer = ({ tasks }: InferenceViewerProps) => {
     return (
         <RobotModelsProvider>
             <Flex flex direction={'column'} height={'100%'} position={'relative'}>
-                <Flex alignItems={'center'} gap='size-100' height='size-400' margin='size-200'>
-                    <Link aria-label='Rewind' href={paths.project.models.index({ project_id })}>
-                        <Back fill='white' />
-                    </Link>
-                    <Heading>Model Run {model?.name}</Heading>
-                    <ComboBox flex aria-label='Task prompt' allowsCustomValue inputValue={task} onInputChange={setTask}>
-                        {tasks.map((taskText) => (
-                            <Item key={taskText}>{taskText}</Item>
-                        ))}
-                    </ComboBox>
-                    <Switch
-                        isEmphasized
-                        isSelected={isTeleoperating}
-                        isDisabled={
-                            !canTeleoperate || setFollowerSource.isPending || startTask.isPending || stopTask.isPending
-                        }
-                        onChange={(enabled) => setFollowerSource.mutate(enabled ? 'teleop' : 'hold')}
-                    >
-                        Teleoperate
-                    </Switch>
-                    <ButtonGroup>
-                        {exportUrl !== undefined && (
-                            <Button
-                                href={exportUrl}
-                                aria-label='Download runtime export'
-                                variant='secondary'
-                                target='_blank'
-                                rel='noopener noreferrer'
+                <Flex direction='column' gap='size-150' margin='size-200'>
+                    <Flex alignItems='center' gap='size-200' wrap>
+                        <Link aria-label='Back to models' href={paths.project.models.index({ project_id })}>
+                            <Back fill='white' />
+                        </Link>
+                        <Heading>Model Run {model?.name}</Heading>
+                        <Flex flex minWidth='size-3000'>
+                            <ComboBox
+                                flex
+                                aria-label='Task prompt'
+                                allowsCustomValue
+                                inputValue={task}
+                                onInputChange={setTask}
                             >
-                                <DownloadIcon />
-                                Runtime export
-                            </Button>
-                        )}
+                                {tasks.map((taskText) => (
+                                    <Item key={taskText}>{taskText}</Item>
+                                ))}
+                            </ComboBox>
+                        </Flex>
+                        <Switch
+                            isEmphasized
+                            isSelected={isTeleoperating}
+                            isDisabled={
+                                !canTeleoperate || setFollowerSource.isPending || startTask.isPending || stopTask.isPending
+                            }
+                            onChange={(enabled) => setFollowerSource.mutate(enabled ? 'teleop' : 'hold')}
+                        >
+                            Teleoperate
+                        </Switch>
                         {state.follower_source === 'policy' ? (
                             <Button variant='primary' isPending={stopTask.isPending} onPress={() => stopTask.mutate()}>
                                 <Pause fill='white' />
@@ -133,7 +133,64 @@ export const InferenceViewer = ({ tasks }: InferenceViewerProps) => {
                                 Play
                             </Button>
                         )}
-                    </ButtonGroup>
+                    </Flex>
+                    <Flex alignItems='end' gap='size-200' wrap>
+                        {model?.policy.toLowerCase() === 'act' && (
+                            <Flex alignItems='end' gap='size-100' wrap>
+                                <NumberField
+                                    label='Replan interval (frames)'
+                                    aria-label='Replan interval in frames'
+                                    value={replanInterval}
+                                    minValue={1}
+                                    maxValue={100}
+                                    step={1}
+                                    width='size-2000'
+                                    onChange={setReplanIntervalInput}
+                                    isDisabled={state.follower_source === 'policy' || setReplanInterval.isPending}
+                                />
+                                <Button
+                                    variant='secondary'
+                                    isDisabled={
+                                        state.follower_source === 'policy' ||
+                                        !Number.isInteger(replanInterval) ||
+                                        replanInterval < 1 ||
+                                        replanInterval > 100 ||
+                                        setReplanInterval.isPending
+                                    }
+                                    onPress={() => setReplanInterval.mutate(replanInterval)}
+                                >
+                                    Apply
+                                </Button>
+                                <Text>Active: {state.replan_interval ?? 'Default (100 frames)'}</Text>
+                            </Flex>
+                        )}
+                        <Button
+                            variant='secondary'
+                            isPending={startDiagnostics.isPending || stopDiagnostics.isPending}
+                            onPress={() =>
+                                state.diagnostics_recording ? stopDiagnostics.mutate() : startDiagnostics.mutate()
+                            }
+                        >
+                            {state.diagnostics_recording ? 'Stop diagnostics' : 'Record diagnostics'}
+                        </Button>
+                        {state.diagnostics_id && model?.id && !state.diagnostics_recording && (
+                            <Link href={`/api/models/${model.id}/diagnostics/${state.diagnostics_id}`} target='_blank'>
+                                Download CSV
+                            </Link>
+                        )}
+                        {exportUrl !== undefined && (
+                            <Button
+                                href={exportUrl}
+                                aria-label='Download runtime export'
+                                variant='secondary'
+                                target='_blank'
+                                rel='noopener noreferrer'
+                            >
+                                <DownloadIcon />
+                                Runtime export
+                            </Button>
+                        )}
+                    </Flex>
                 </Flex>
                 <RobotControlView environment={environment} isReady={state.connected} joints={observation} />
             </Flex>

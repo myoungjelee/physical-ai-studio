@@ -11,13 +11,18 @@ from runtime.contract import (
     ErrorEvent,
     LoadModelCommand,
     SetFollowerSourceCommand,
+    SetReplanIntervalCommand,
+    StartInferenceDiagnosticsCommand,
     StartRecordingCommand,
     StartTaskCommand,
     StateData,
     StateEvent,
+    StopInferenceDiagnosticsCommand,
     StopTaskCommand,
 )
+from runtime.diagnostics import InferenceDiagnostics
 from runtime.policy_loader import PolicyLoader, model_identity, requires_task
+from settings import get_settings
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -67,6 +72,7 @@ class StudioActionSource:
         self._arming = False
         self._model_loaded = False
         self._loaded_identity: ModelIdentity | None = None
+        self._replan_interval: int | None = None
         self._task: str | None = None
         self._policy_error_emitted = False
         self._last_robot_state: RobotObservation | None = None
@@ -78,6 +84,7 @@ class StudioActionSource:
             models_dir=models_dir,
         )
         self._recording: RecordingState | None = None
+        self.diagnostics = InferenceDiagnostics(get_settings().storage_dir / "diagnostics")
 
     @property
     def follower_source(self) -> FollowerSource:
@@ -95,6 +102,9 @@ class StudioActionSource:
             follower_source=self._follower_source,
             has_leader=self._leader_reads_enabled,
             model_loaded=self._model_loaded,
+            replan_interval=self._replan_interval,
+            diagnostics_recording=self.diagnostics.is_recording,
+            diagnostics_id=self.diagnostics.recording_id,
             task=self._task,
             dataset_loaded=None if recording is None else recording.dataset_loaded,
             is_recording=None if recording is None else recording.is_recording,
@@ -132,6 +142,7 @@ class StudioActionSource:
         return self._hold_target.copy()
 
     def disconnect(self) -> None:
+        self.diagnostics.stop()
         """Clear per-run state without stopping a loaded policy's execution worker."""
         self._bus = None
         self._session_id = None
@@ -145,6 +156,7 @@ class StudioActionSource:
         self._last_camera_frames = {}
 
     def shutdown_policy(self) -> None:
+        self.diagnostics.stop()
         """Stop in-flight loads and the policy execution worker. Session teardown only."""
         self._loader.shutdown()
         with self._policy_lock:
@@ -224,6 +236,13 @@ class StudioActionSource:
         for command in self._mailbox.drain():
             if isinstance(command, LoadModelCommand):
                 self._handle_load_model(command)
+            elif isinstance(command, SetReplanIntervalCommand):
+                self._handle_set_replan_interval(command)
+            elif isinstance(command, StartInferenceDiagnosticsCommand):
+                self._handle_start_diagnostics()
+            elif isinstance(command, StopInferenceDiagnosticsCommand):
+                self.diagnostics.stop()
+                self._emit_state()
             elif isinstance(command, StartTaskCommand):
                 self._handle_start_task(command)
             elif isinstance(command, StopTaskCommand):
@@ -247,7 +266,10 @@ class StudioActionSource:
         # Clear before the load, not after it fails: leaving the previous
         # identity in place would let a later request for that model match a
         # policy this load is about to replace.
+        self.diagnostics.stop()
+        self.diagnostics.clear_last_recording()
         self._loaded_identity = None
+        self._replan_interval = None
         self._cancel_arming()
         self._model_loaded = False
         self._emit_state()
@@ -265,6 +287,47 @@ class StudioActionSource:
             bus=self._bus,
             session_id=self._session_id,
         )
+
+    def _handle_start_diagnostics(self) -> None:
+        if self._loaded_identity is None or not self._model_loaded:
+            self._event_sink.emit(
+                ErrorEvent(
+                    message="Load a model before recording inference diagnostics.", error_code="model_not_loaded"
+                )
+            )
+            return
+        try:
+            self.diagnostics.start(self._loaded_identity[0], list(self._follower.joint_names))
+        except (ValueError, OSError) as exc:
+            self._event_sink.emit(ErrorEvent(message=str(exc), error_code="diagnostics_start_failed"))
+            return
+        self._emit_state()
+
+    def _handle_set_replan_interval(self, command: SetReplanIntervalCommand) -> None:
+        if self._follower_source == "policy" or self._arming:
+            self._event_sink.emit(
+                ErrorEvent(
+                    message="Stop inference before changing the replan interval.", error_code="replan_while_running"
+                )
+            )
+            return
+        with self._policy_lock:
+            policy = self._policy
+        if policy is None or not self._model_loaded:
+            self._event_sink.emit(
+                ErrorEvent(message="Load a model before setting the replan interval.", error_code="model_not_loaded")
+            )
+            return
+        try:
+            execution = getattr(policy, "_execution", None)
+            if not hasattr(execution, "set_replan_interval"):
+                raise ValueError("This model execution backend does not support adjustable replanning")
+            execution.set_replan_interval(command.replan_interval)
+        except ValueError as exc:
+            self._event_sink.emit(ErrorEvent(message=str(exc), error_code="invalid_replan_interval"))
+            return
+        self._replan_interval = command.replan_interval
+        self._emit_state()
 
     def _handle_start_task(self, command: StartTaskCommand) -> None:
         if not self._arm_policy(task=command.task):

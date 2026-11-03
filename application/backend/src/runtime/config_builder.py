@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from schemas.robot import Robot
 
 RUNTIME_FPS = 30.0
-POLICY_REQUEST_THRESHOLD = 0.5
+POLICY_REQUEST_THRESHOLD = 0.0
 
 
 class _StoredPortFallback:
@@ -105,7 +105,9 @@ def policy_source_from_fragment(fragment: dict[str, Any]) -> PolicySource:
     the same constructors Studio already uses.
     """
     from physicalai.inference import InferenceModel
-    from physicalai.runtime import ChunkedActionQueue, LerpSmoother, PolicySource, SyncExecution
+    from physicalai.runtime import ChunkedActionQueue, LerpSmoother, PolicySource
+
+    from runtime.replan_execution import AdjustableSyncExecution
 
     args = fragment["init_args"]
     model_args = args["model"]["init_args"]
@@ -117,7 +119,7 @@ def policy_source_from_fragment(fragment: dict[str, Any]) -> PolicySource:
             backend=model_args["backend"],
             device=model_args["device"],
         ),
-        execution=SyncExecution(request_threshold=exec_args["request_threshold"]),
+        execution=AdjustableSyncExecution(request_threshold=exec_args["request_threshold"]),
         action_queue=ChunkedActionQueue(smoother=LerpSmoother()),
         task=args.get("task"),
     )

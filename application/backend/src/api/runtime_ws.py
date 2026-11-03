@@ -91,6 +91,9 @@ _RUNTIME_PUBLICATIONS = frozenset(
     {
         "set_follower_source",
         "load_model",
+        "set_replan_interval",
+        "start_inference_diagnostics",
+        "stop_inference_diagnostics",
         "start_task",
         "stop_task",
         "load_dataset",
